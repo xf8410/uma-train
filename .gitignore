@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
-data/
+data/training_data/
+data/selfplay_logs/
 saved_models/
 .tmp/
