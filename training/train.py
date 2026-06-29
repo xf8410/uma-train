@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 
 from .dataset import UmaTrainDataset, SelfPlayDataset, generate_random_data
 from model.network import create_model, load_model, save_model, MODEL_DICT
@@ -27,6 +28,8 @@ from config import (
     VALUE_LOSS_WEIGHT_MEAN, VALUE_LOSS_WEIGHT_STDEV, VALUE_LOSS_WEIGHT_OPTIMISTIC,
     VALUE_MEAN_OFFSET, VALUE_MEAN_SCALE, VALUE_STDEV_SCALE,
     SAVE_STEP, INFO_STEP,
+    GRAD_CLIP_NORM, LR_SCHEDULER_TYPE, LR_COSINE_ETA_MIN_RATIO,
+    LR_STEP_STEP, LR_STEP_GAMMA, EARLY_STOP_PATIENCE,
 )
 
 
@@ -98,6 +101,9 @@ def train(
     new_train: bool = False,
     value_sampling: float = 1.0,
     rollback_threshold: float = 0.05,
+    grad_clip_norm: float = GRAD_CLIP_NORM,
+    lr_scheduler_type: str = LR_SCHEDULER_TYPE,
+    early_stop_patience: int = EARLY_STOP_PATIENCE,
 ):
     """训练主循环
     
@@ -117,6 +123,9 @@ def train(
         value_sampling: 价值损失采样率
         rollback_threshold: 回滚阈值
         new_train: 是否重新训练
+        grad_clip_norm: 梯度裁剪L2范数阈值，0表示不裁剪
+        lr_scheduler_type: 学习率调度器类型，"cosine"/"step"/空字符串
+        early_stop_patience: 早停耐心值，0表示不早停
     """
     # 设备
     device = torch.device(f"cuda:{gpu}" if gpu >= 0 and torch.cuda.is_available() else "cpu")
@@ -155,6 +164,18 @@ def train(
     lr = LEARNING_RATE * lr_scale
     wd = WEIGHT_DECAY * wd_scale
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+
+    # 学习率调度器
+    scheduler = None
+    if lr_scheduler_type == "cosine":
+        eta_min = lr * LR_COSINE_ETA_MIN_RATIO
+        scheduler = CosineAnnealingLR(optimizer, T_max=max_step, eta_min=eta_min)
+    elif lr_scheduler_type == "step":
+        scheduler = StepLR(optimizer, step_size=LR_STEP_STEP, gamma=LR_STEP_GAMMA)
+
+    # 早停状态
+    best_val_loss = None
+    early_stop_counter = 0
 
     # 回滚备份
     model_backup1 = copy.deepcopy(model.state_dict())
@@ -213,7 +234,13 @@ def train(
             loss_record[4] += p1_correct / batch_size
 
             loss.backward()
+            # 梯度裁剪
+            if grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
+            # 学习率调度
+            if scheduler is not None:
+                scheduler.step()
 
             total_step += 1
 
@@ -232,7 +259,8 @@ def train(
                       f"total_loss={total_loss_train:.4f}, "
                       f"v_loss={v_loss_train:.4f}, "
                       f"p_loss={p_loss_train:.4f}, "
-                      f"p1_acc={100*p1_acc_train:.1f}%")
+                      f"p1_acc={100*p1_acc_train:.1f}%, "
+                      f"lr={optimizer.param_groups[0]['lr']:.6f}")
 
                 # 检查loss爆炸
                 if total_loss_train > backup1_loss + rollback_threshold:
@@ -283,6 +311,19 @@ def train(
                         v_val = v_loss_record[1] / v_loss_record[3]
                         p_val = v_loss_record[2] / v_loss_record[3]
                         print(f"验证: total={total_val:.4f}, v={v_val:.4f}, p={p_val:.4f}")
+
+                        # 早停检查
+                        if early_stop_patience > 0:
+                            if best_val_loss is None or total_val < best_val_loss:
+                                best_val_loss = total_val
+                                early_stop_counter = 0
+                            else:
+                                early_stop_counter += 1
+                                print(f"早停计数: {early_stop_counter}/{early_stop_patience} (最佳验证loss={best_val_loss:.4f})")
+                                if early_stop_counter >= early_stop_patience:
+                                    print(f"早停触发！连续{early_stop_patience}个save_step验证loss未下降，停止训练")
+                                    save_model(model, model_path, total_step)
+                                    return
 
                     model.train()
 

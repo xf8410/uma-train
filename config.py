@@ -368,6 +368,18 @@ DEFAULT_MLP_BLOCKS = 3
 DEFAULT_MLP_FEATURES = 256
 DEFAULT_GLOBAL_FEATURES = 256
 
+# 梯度裁剪
+GRAD_CLIP_NORM = 1.0  # L2范数裁剪阈值，0表示不裁剪
+
+# 学习率调度
+LR_SCHEDULER_TYPE = "cosine"  # 调度器类型："cosine"或"step"，空字符串表示不用
+LR_COSINE_ETA_MIN_RATIO = 0.05  # 余弦退火最小学习率比例
+LR_STEP_STEP = 50000  # 阶梯衰减步数
+LR_STEP_GAMMA = 0.1  # 阶梯衰减倍率
+
+# 早停
+EARLY_STOP_PATIENCE = 0  # 早停耐心值，连续N个save_step验证loss不降就停，0表示不早停
+
 
 # ============================================================================
 # MCTS搜索参数
