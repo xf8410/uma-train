@@ -369,6 +369,176 @@ def test_game_bc_integration():
     print("  [PASS] Game+BC集成测试通过!")
 
 
+
+# ============================================================
+# 新增测试组：MCTS/NN/训练循环覆盖扩展
+# ============================================================
+
+def test_mcts_full_game():
+    print(chr(10) + '=== 测试MCTS完整搜索 ===')
+    from simulator.game import Game
+    from search.mcts import MCTS, SearchParam
+    from model.handwritten import HandwrittenEvaluator
+    from simulator.action import Action, TrainActionType, GameStage
+
+    rng = random.Random(123)
+    game = Game()
+    game.new_game(rng)
+
+    evaluator = HandwrittenEvaluator()
+    mcts = MCTS(evaluator=evaluator)
+    param = SearchParam(search_single_max=4, max_depth=1, search_group_size=2)
+
+    turn_count = 0
+    while not game.is_end() and turn_count < 10:
+        action = mcts.run_search(game, rng, param)
+        assert action is not None, '搜索返回None'
+        assert game.is_legal(action), '搜索返回了不合法动作'
+        game.apply_action(rng, action)
+        turn_count += 1
+
+    print(f'  成功跑过 {turn_count} 回合，无crash')
+
+    mcts2 = MCTS(evaluator=evaluator)
+    game2 = Game()
+    game2.new_game(rng)
+    action2 = mcts2.run_search(game2, rng, param)
+    assert action2 is not None, '搜索应返回动作'
+    legal_searched = sum(1 for r in mcts2.all_action_results if r.is_legal and r.num > 0)
+    assert legal_searched > 0, '搜索结果中应至少有一个合法动作被选中'
+    print(f'  搜索结果中有 {legal_searched} 个合法动作被选中')
+
+    try:
+        mcts2.print_search_result(param, show_search_num=True)
+        print('  search_log可读: OK')
+    except Exception as e:
+        assert False, f'print_search_result失败: {e}'
+
+    print('  [PASS] MCTS完整搜索测试通过!')
+
+
+def test_handwritten_evaluator():
+    print(chr(10) + '=== 测试手写评估器 ===')
+    from simulator.game import Game
+    from model.handwritten import HandwrittenEvaluator
+    from simulator.bad_condition import BadConditionType
+    from simulator.scenarios.ramen import RamenScenario
+    from simulator.action import Action, TrainActionType, GameStage
+
+    rng = random.Random(42)
+    game = Game()
+    game.new_game(rng)
+    evaluator = HandwrittenEvaluator()
+
+    score_base = evaluator.evaluate(game)
+    assert isinstance(score_base, int)
+    print(f'  基础评估值: {score_base}')
+
+    for _ in range(5):
+        action = evaluator.select_action(game, rng)
+        game.apply_action(rng, action)
+    score_mid = evaluator.evaluate(game)
+    print(f'  中期评估值: {score_mid}')
+
+    game_bc = Game()
+    game_bc.new_game(rng)
+    val_no_bc = evaluator._evaluate_action(game_bc,
+        Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
+    game_bc.bc_manager.acquire(BadConditionType.BAD, 3)
+    val_with_bc = evaluator._evaluate_action(game_bc,
+        Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
+    assert val_with_bc < val_no_bc
+    print(f'  BC惩罚生效: 无BC={val_no_bc:.1f}, 有BC={val_with_bc:.1f} (差={val_no_bc - val_with_bc:.1f})')
+
+    game_ramen = Game()
+    game_ramen.new_game(rng)
+    val_no_ramen = evaluator._evaluate_action(game_ramen,
+        Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
+    ramen = RamenScenario()
+    ramen.add_kakushimi(20)
+    game_ramen._ramen_scenario = ramen
+    val_with_ramen = evaluator._evaluate_action(game_ramen,
+        Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
+    assert val_with_ramen > val_no_ramen
+    print(f'  Ramen加成生效: 无Ramen={val_no_ramen:.1f}, 有Ramen={val_with_ramen:.1f} (加={val_with_ramen - val_no_ramen:.1f})')
+
+    print('  [PASS] 手写评估器测试通过!')
+
+
+def test_nn_input_encoding():
+    print(chr(10) + '=== 测试NN输入编码 ===')
+    from simulator.game import Game
+    from model.nn_input import encode_game_state
+    from config import NN_INPUT_C
+    from simulator.action import Action, TrainActionType, GameStage
+
+    rng = random.Random(42)
+
+    game = Game()
+    game.new_game(rng)
+    nn_input = encode_game_state(game)
+    assert len(nn_input) == NN_INPUT_C
+    print(f'  编码长度: {len(nn_input)} (期望 {NN_INPUT_C})')
+
+    min_val = min(nn_input)
+    max_val = max(nn_input)
+    assert min_val >= -2.0
+    assert max_val <= 2.0
+    print(f'  值范围: [{min_val:.4f}, {max_val:.4f}]')
+
+    game2 = Game()
+    game2.new_game(rng)
+    for _ in range(5):
+        act = Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED)
+        if game2.is_legal(act):
+            game2.apply_action(rng, act)
+        else:
+            act = Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.REST)
+            game2.apply_action(rng, act)
+    nn_input2 = encode_game_state(game2)
+
+    diff_count = sum(1 for a, b in zip(nn_input, nn_input2) if abs(a - b) > 1e-6)
+    assert diff_count > 0
+    total_diff = sum(abs(a - b) for a, b in zip(nn_input, nn_input2))
+    print(f'  编码差异: {diff_count}/{NN_INPUT_C}个维度不同, 总差={total_diff:.2f}')
+
+    print('  [PASS] NN输入编码测试通过!')
+
+
+def test_training_loss():
+    print(chr(10) + '=== 测试训练损失计算 ===')
+    try:
+        import torch
+    except ImportError:
+        print('  [SKIP] PyTorch未安装，跳过训练损失测试')
+        return
+
+    from training.train import calculate_loss
+    from config import Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value
+
+    batch_size = 8
+    output = torch.randn(batch_size, Game_Output_C)
+    label_policy = torch.nn.functional.softmax(torch.randn(batch_size, Game_Output_C_Policy), dim=1)
+    label_value = torch.randn(batch_size, Game_Output_C_Value) * 100 + 38000
+    label = torch.cat([label_policy, label_value], dim=1)
+
+    v_loss, p_loss = calculate_loss(output, label)
+
+    assert torch.isfinite(v_loss)
+    assert torch.isfinite(p_loss)
+    print(f'  value_loss: {v_loss.item():.4f}')
+    print(f'  policy_loss: {p_loss.item():.4f}')
+
+    assert v_loss.item() >= 0
+    assert p_loss.item() >= 0
+    print('  两个loss均为非负有限值: OK')
+
+    total_loss = v_loss + p_loss
+    total_loss.backward()
+    print('  反向传播正常: OK')
+
+    print('  [PASS] 训练损失计算测试通过!')
+
 if __name__ == "__main__":
     test_game()
     test_mcts()
@@ -376,5 +546,11 @@ if __name__ == "__main__":
     test_bad_condition()
     test_ramen_scenario()
     test_game_bc_integration()
-    print("\n" + "="*50)
+    # 新增测试组
+    test_mcts_full_game()
+    test_handwritten_evaluator()
+    test_nn_input_encoding()
+    test_training_loss()
+    print()
+    print("="*50)
     print("全部验收通过! ✓")
