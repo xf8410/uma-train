@@ -20,6 +20,8 @@ from config import (
     SEARCH_STAGE_NUM, SEARCH_FACTOR_STAGE, SEARCH_THRESHOLD_STDEV_STAGE,
     NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE,
     MCTS_POLICY_TEMPERATURE,
+    HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR,
+    COMPARE_WITH_HANDWRITTEN,
 )
 
 
@@ -82,6 +84,8 @@ class MCTS:
         self.evaluator = evaluator or HandwrittenEvaluator()
         self.all_action_results: List[SearchResult] = []
         self.root_game: Optional[Game] = None
+        # 决策归因日志：每次run_search清空，搜索结束后可读取
+        self.search_log: List[dict] = []
 
     def run_search(
         self,
@@ -101,6 +105,9 @@ class MCTS:
         """
         if param is None:
             param = SearchParam()
+
+        # 每次搜索清空归因日志
+        self.search_log = []
 
         self.root_game = deepcopy(game)
         radical_factor = adjust_radical_factor(param.max_radical_factor, self.root_game.turn)
@@ -178,6 +185,19 @@ class MCTS:
                 best_action_int = action_int
 
         best_action = Action.from_int(best_action_int)
+
+        # 记录最终选择到归因日志
+        self.search_log.append({
+            "type": "final_decision",
+            "best_action": best_action_int,
+            "best_value": best_value,
+            "turn": self.root_game.turn,
+        })
+
+        # NN vs 手写对账（纯诊断，不影响搜索结果）
+        if COMPARE_WITH_HANDWRITTEN:
+            self._compare_with_handwritten(self.root_game, rng)
+
         return best_action
 
     def _search_single_action(
@@ -201,7 +221,8 @@ class MCTS:
                 if game_copy.is_end():
                     break
                 # 选择动作（用策略）
-                next_action = self._select_action_by_policy(game_copy, rng)
+                # 选择动作（用策略，返回归因meta但这里不存）
+                next_action, _meta = self._select_action_by_policy(game_copy, rng)
                 game_copy.apply_action(rng, next_action)
 
             # 评估最终状态
@@ -218,21 +239,35 @@ class MCTS:
 
             search_result.add_result(v)
 
-    def _select_action_by_policy(self, game: Game, rng: random.Random) -> Action:
-        """根据策略选择动作
-        
+    def _select_action_by_policy(self, game: Game, rng: random.Random) -> Tuple[Action, dict]:
+        """根据策略选择动作，同时返回归因meta
+
         如果有神经网络模型，使用网络输出策略；
         否则使用手写逻辑。
+
+        Returns:
+            (action, meta) 其中meta包含source、action、top3等归因信息
         """
         if self.model is not None:
-            # 使用神经网络推理（简化版，实际应该batch推理）
-            return self._select_action_by_nn(game, rng)
+            action, meta = self._select_action_by_nn(game, rng)
+            return action, meta
         else:
             # 使用手写逻辑
-            return self.evaluator.select_action(game, rng)
+            action = self.evaluator.select_action(game, rng)
+            meta = {
+                "source": "handwritten",
+                "action": action.train if hasattr(action, 'train') else -1,
+                "top3_actions_with_probs": [],
+            }
+            self.search_log.append({
+                "type": "select_action",
+                **meta,
+            })
+            return action, meta
 
-    def _select_action_by_nn(self, game: Game, rng: random.Random) -> Action:
-        """使用神经网络策略选择动作"""
+
+    def _select_action_by_nn(self, game: Game, rng: random.Random) -> Tuple[Action, dict]:
+        """使用神经网络策略选择动作，记录完整归因信息"""
         import torch
         from model.nn_input import encode_game_state
 
@@ -245,7 +280,14 @@ class MCTS:
             output = self.model(nn_input_tensor)
             policy_logits = output[0, :NN_OUTPUT_C_POLICY]
 
-        # 掩除不合法动作
+        # 记录原始logits（只记录合法动作，避免日志过大）
+        raw_logits = {}
+        for action_int in range(min(NN_OUTPUT_C_POLICY, Action.MAX_ACTION_TYPE)):
+            action = Action.from_int(action_int)
+            if game.is_legal(action):
+                raw_logits[action_int] = round(policy_logits[action_int].item(), 4)
+
+        # 排除不合法动作
         for action_int in range(Action.MAX_ACTION_TYPE):
             action = Action.from_int(action_int)
             if not game.is_legal(action):
@@ -254,11 +296,28 @@ class MCTS:
         # softmax
         probs = torch.softmax(policy_logits, dim=0).numpy()
 
+        # 记录top3
+        legal_items = [(i, probs[i]) for i in range(len(probs)) if probs[i] > 1e-8]
+        legal_items.sort(key=lambda x: -x[1])
+        top3 = [(a, round(p, 6)) for a, p in legal_items[:3]]
+
         # 按概率采样
         legal_indices = [i for i in range(len(probs)) if probs[i] > 1e-8]
+        fallback = False
         if not legal_indices:
             # fallback到手写逻辑
-            return self.evaluator.select_action(game, rng)
+            fallback = True
+            action = self.evaluator.select_action(game, rng)
+            meta = {
+                "source": "fallback",
+                "action": action.train if hasattr(action, 'train') else -1,
+                "top3_actions_with_probs": top3,
+                "raw_logits_sample": raw_logits,
+                "softmax_probs_sample": {a: round(p, 6) for a, p in legal_items[:10]},
+                "fallback": True,
+            }
+            self.search_log.append({"type": "select_action", **meta})
+            return action, meta
 
         legal_probs = [probs[i] for i in legal_indices]
         total = sum(legal_probs)
@@ -268,14 +327,29 @@ class MCTS:
             legal_probs = [p / total for p in legal_probs]
             chosen_idx = rng.choices(legal_indices, weights=legal_probs, k=1)[0]
 
-        return Action.from_int(chosen_idx)
+        action = Action.from_int(chosen_idx)
+        meta = {
+            "source": "nn",
+            "action": chosen_idx,
+            "top3_actions_with_probs": top3,
+            "raw_logits_sample": raw_logits,
+            "softmax_probs_sample": {a: round(p, 6) for a, p in legal_items[:10]},
+            "fallback": False,
+        }
+        self.search_log.append({"type": "select_action", **meta})
+        return action, meta
+
 
     def _evaluate_game(self, game: Game, rng: random.Random) -> ModelOutputValue:
-        """评估游戏状态
-        
+        """评估游戏状态，记录归因信息
+
         如果有神经网络模型，使用模型评估；
         否则使用手写逻辑估算。
         """
+        progress = game.turn / TOTAL_TURN
+        # 统一使用config中的标准差参数（不再硬编码）
+        handwritten_stdev = HANDWRITTEN_STDEV_BASE * (1.0 - progress) + HANDWRITTEN_STDEV_FLOOR
+
         if self.model is not None:
             import torch
             from model.nn_input import encode_game_state
@@ -287,26 +361,105 @@ class MCTS:
                 output = self.model(nn_input_tensor)
                 value_output = output[0, NN_OUTPUT_C_POLICY:]
 
+            # 记录NN原始输出
+            nn_raw = [round(value_output[i].item(), 6) for i in range(NN_OUTPUT_C_VALUE)]
+
             # 反归一化
             score_mean = value_output[0].item() * 300 + 38000
             score_stdev = value_output[1].item() * 150
             optimistic = value_output[2].item() * 300 + 38000
 
-            return ModelOutputValue(
+            denormalized_value = ModelOutputValue(
                 score_mean=score_mean,
                 score_stdev=max(0, score_stdev),
                 value=optimistic
             )
+
+            # 同时计算手写评估值（用于对比，不影响搜索结果）
+            handwritten_score = self.evaluator.evaluate(game)
+
+            self.search_log.append({
+                "type": "evaluate_game",
+                "source": "nn",
+                "nn_raw_output": nn_raw,
+                "denormalized_value": {
+                    "score_mean": round(denormalized_value.score_mean, 2),
+                    "score_stdev": round(denormalized_value.score_stdev, 2),
+                    "value": round(denormalized_value.value, 2),
+                },
+                "handwritten_value": handwritten_score,
+                "turn": game.turn,
+            })
+
+            return denormalized_value
         else:
             # 手写逻辑评估
             score = self.evaluator.evaluate(game)
-            progress = game.turn / TOTAL_TURN
-            stdev = 500.0 * (1.0 - progress) + 100.0
-            return ModelOutputValue(
+            result = ModelOutputValue(
                 score_mean=float(score),
-                score_stdev=stdev,
+                score_stdev=handwritten_stdev,
                 value=float(score)
             )
+
+            self.search_log.append({
+                "type": "evaluate_game",
+                "source": "handwritten",
+                "nn_raw_output": None,
+                "denormalized_value": {
+                    "score_mean": round(result.score_mean, 2),
+                    "score_stdev": round(result.score_stdev, 2),
+                    "value": round(result.value, 2),
+                },
+                "handwritten_value": score,
+                "turn": game.turn,
+            })
+
+            return result
+
+
+    def _compare_with_handwritten(self, game: Game, rng: random.Random):
+        """NN vs 手写对账：对root_game的每个合法action同时跑两种评估
+
+        纯诊断用，不影响搜索结果，记录到search_log。
+        """
+        comparison_results = []
+
+        for action_int in range(Action.MAX_ACTION_TYPE):
+            action = Action.from_int(action_int)
+            if not game.is_legal(action):
+                continue
+
+            # 手写评估
+            hw_value = self.evaluator._evaluate_action(game, action, rng)
+
+            # NN评估（如果模型可用）
+            nn_value = None
+            if self.model is not None:
+                try:
+                    import torch
+                    from model.nn_input import encode_game_state
+                    game_copy = deepcopy(game)
+                    game_copy.apply_action(rng, action)
+                    nn_input = encode_game_state(game_copy)
+                    nn_input_tensor = torch.FloatTensor(nn_input).unsqueeze(0)
+                    with torch.no_grad():
+                        output = self.model(nn_input_tensor)
+                        value_output = output[0, NN_OUTPUT_C_POLICY:]
+                    nn_value = round(value_output[0].item() * 300 + 38000, 2)
+                except Exception:
+                    nn_value = None
+
+            comparison_results.append({
+                "action": action_int,
+                "handwritten_value": round(hw_value, 2),
+                "nn_value": nn_value,
+                "diff": round(nn_value - hw_value, 2) if nn_value is not None else None,
+            })
+
+        self.search_log.append({
+            "type": "nn_vs_handwritten_comparison",
+            "comparisons": comparison_results,
+        })
 
     def print_search_result(self, param: SearchParam, show_search_num: bool = False):
         """打印搜索结果"""

@@ -14,7 +14,7 @@ from search.mcts import MCTS, SearchParam
 from search.search_result import ModelOutputValue
 from model.nn_input import encode_game_state
 from model.handwritten import HandwrittenEvaluator
-from config import TOTAL_TURN, NN_INPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE
+from config import TOTAL_TURN, NN_INPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE, HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR
 
 
 class SelfPlayWorker:
@@ -79,11 +79,27 @@ class SelfPlayWorker:
             # 提取策略
             policy = self._extract_policy(game)
             
-            # 记录样本
+            # 记录样本（含MCTS搜索value信息，用于诊断）
+            # 提取MCTS搜索结果中的value信息
+            mcts_search_value = None
+            mcts_search_stdev = None
+            try:
+                radical_factor_temp = 1.0  # 简化，用默认值
+                for r in self.mcts.all_action_results:
+                    if r.is_legal and r.num > 0:
+                        v = r.get_weighted_mean_score(radical_factor_temp)
+                        if mcts_search_value is None or v.value > mcts_search_value:
+                            mcts_search_value = round(v.value, 2)
+                            mcts_search_stdev = round(v.score_stdev, 2)
+            except Exception:
+                pass
+
             samples.append({
                 "nn_input": nn_input,
                 "policy": policy,
                 "turn": game.turn,
+                "mcts_search_value": mcts_search_value,
+                "mcts_search_stdev": mcts_search_stdev,
             })
             
             # 应用动作
@@ -92,19 +108,35 @@ class SelfPlayWorker:
         # 游戏结束，计算最终得分
         final_score = game.final_score()
         
-        # 回填价值
+        # 回填价值（含诊断信息）
         for sample in samples:
             turn = sample["turn"]
-            # 根据剩余回合数估算标准差
+            # 统一使用config中的标准差参数（不再硬编码）
             progress = turn / TOTAL_TURN
-            stdev = 500.0 * (1.0 - progress) + 100.0
+            backfill_stdev = HANDWRITTEN_STDEV_BASE * (1.0 - progress) + HANDWRITTEN_STDEV_FLOOR
+
+            # 获取MCTS搜索时的实际stdev（如果有）
+            mcts_stdev = sample.get("mcts_search_stdev", None)
+            # 用MCTS实际stdev或配置参数，不硬编码
+            stdev = mcts_stdev if mcts_stdev is not None and mcts_stdev > 0 else backfill_stdev
+            
+            backfill_value = (final_score - 38000) / 300
+            # 获取MCTS搜索时的value（如果有）
+            mcts_value = sample.get("mcts_search_value", None)
             
             sample["value"] = [
-                (final_score - 38000) / 300,
+                backfill_value,
                 stdev / 150,
-                (final_score - 38000) / 300,  # 乐观分 = 平均分
+                backfill_value,  # 乐观分 = 平均分
             ]
             sample["final_score"] = final_score
+            
+            # 价值诊断信息：记录MCTS搜索value和回填value的差异
+            sample["value_diag"] = {
+                "mcts_value": mcts_value,
+                "backfill_value": backfill_value,
+                "diff": round(backfill_value - mcts_value, 4) if mcts_value is not None else None,
+            }
         
         return samples
     

@@ -420,3 +420,30 @@ MCTS_POLICY_TEMPERATURE = 1.0  # 策略温度，越大越均匀；1.0为标准so
 
 SELFPLAY_NUM_GAMES = 100  # 自我对弈局数
 SELFPLAY_BATCH_SIZE = 16  # 自我对弈批大小
+
+
+# ============================================================================
+# MCTS决策归因日志参数
+# ============================================================================
+
+# 手写评估默认标准差（用于非NN评估时的stdev估算）
+# 原来硬编码在_evaluate_game和selfplay里，现统一到config
+HANDWRITTEN_STDEV_BASE = 500.0    # 手写评估初始标准差
+HANDWRITTEN_STDEV_FLOOR = 100.0   # 手写评估最终标准差（游戏接近结束时）
+
+# NN vs 手写对账模式（默认关闭，仅诊断用）
+COMPARE_WITH_HANDWRITTEN = False
+
+
+# ============================================================================
+# 训练损失与rollback参数
+# ============================================================================
+
+# value_loss基础权重（始终参与loss计算，不再随机丢弃）
+# 原来用value_sampling随机丢弃value_loss，改为固定权重
+VALUE_LOSS_BASE_WEIGHT = 0.5
+
+# v_loss和p_loss各自的rollback阈值（相对于最近备份点的增量）
+# 设为0表示不单独检查该loss，只看total
+V_LOSS_ROLLBACK_THRESHOLD = 0.05
+P_LOSS_ROLLBACK_THRESHOLD = 0.05

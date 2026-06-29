@@ -30,6 +30,8 @@ from config import (
     SAVE_STEP, INFO_STEP,
     GRAD_CLIP_NORM, LR_SCHEDULER_TYPE, LR_COSINE_ETA_MIN_RATIO,
     LR_STEP_STEP, LR_STEP_GAMMA, EARLY_STOP_PATIENCE,
+    VALUE_LOSS_BASE_WEIGHT,
+    V_LOSS_ROLLBACK_THRESHOLD, P_LOSS_ROLLBACK_THRESHOLD,
 )
 
 
@@ -99,7 +101,6 @@ def train(
     info_step: int = INFO_STEP,
     gpu: int = 0,
     new_train: bool = False,
-    value_sampling: float = 1.0,
     rollback_threshold: float = 0.05,
     grad_clip_norm: float = GRAD_CLIP_NORM,
     lr_scheduler_type: str = LR_SCHEDULER_TYPE,
@@ -120,7 +121,6 @@ def train(
         save_step: 保存间隔
         info_step: 日志间隔
         gpu: GPU编号（-1为CPU）
-        value_sampling: 价值损失采样率
         rollback_threshold: 回滚阈值
         new_train: 是否重新训练
         grad_clip_norm: 梯度裁剪L2范数阈值，0表示不裁剪
@@ -184,6 +184,10 @@ def train(
     backup2_step = start_step
     backup1_loss = 1e10
     backup2_loss = 1e10
+    v_backup1_loss = 1e10  # v_loss备份值（用于分别判断v_loss是否爆炸）
+    v_backup2_loss = 1e10
+    p_backup1_loss = 1e10  # p_loss备份值（用于分别判断p_loss是否爆炸）
+    p_backup2_loss = 1e10
 
     # 训练数据
     print("加载训练数据...")
@@ -223,9 +227,8 @@ def train(
             p1_predicted_values = label_policy[torch.arange(label_policy.shape[0]), p1_predicted]
             p1_correct = (p1_predicted == p1_labels).sum().item()
 
-            loss = 0.0 * v_loss + 1.0 * p_loss
-            if random.random() <= value_sampling:
-                loss = 1.0 * v_loss + 1.0 * p_loss
+            # value_loss始终参与，用固定权重（不再随机丢弃）
+            loss = p_loss + VALUE_LOSS_BASE_WEIGHT * v_loss
 
             loss_record[0] += (v_loss.detach().item() + p_loss.detach().item())
             loss_record[1] += v_loss.detach().item()
@@ -257,26 +260,44 @@ def train(
 
                 print(f"step={total_step}, time={time_used:.1f}s, "
                       f"total_loss={total_loss_train:.4f}, "
-                      f"v_loss={v_loss_train:.4f}, "
-                      f"p_loss={p_loss_train:.4f}, "
+                      f"v_loss={v_loss_train:.4f}(bk={v_backup1_loss:.4f}), "
+                      f"p_loss={p_loss_train:.4f}(bk={p_backup1_loss:.4f}), "
                       f"p1_acc={100*p1_acc_train:.1f}%, "
                       f"lr={optimizer.param_groups[0]['lr']:.6f}")
 
-                # 检查loss爆炸
-                if total_loss_train > backup1_loss + rollback_threshold:
-                    print(f"Loss爆炸，回滚到step {backup2_step}")
+                # 分别检查v_loss和p_loss是否爆炸
+                v_rollback = V_LOSS_ROLLBACK_THRESHOLD > 0 and v_loss_train > v_backup1_loss + V_LOSS_ROLLBACK_THRESHOLD
+                p_rollback = P_LOSS_ROLLBACK_THRESHOLD > 0 and p_loss_train > p_backup1_loss + P_LOSS_ROLLBACK_THRESHOLD
+                total_rollback = total_loss_train > backup1_loss + rollback_threshold
+
+                if v_rollback or p_rollback or total_rollback:
+                    # 打印是哪个loss爆了
+                    reasons = []
+                    if v_rollback:
+                        reasons.append(f"v_loss({v_loss_train:.4f}>{v_backup1_loss:.4f}+{V_LOSS_ROLLBACK_THRESHOLD})")
+                    if p_rollback:
+                        reasons.append(f"p_loss({p_loss_train:.4f}>{p_backup1_loss:.4f}+{P_LOSS_ROLLBACK_THRESHOLD})")
+                    if total_rollback:
+                        reasons.append(f"total({total_loss_train:.4f}>{backup1_loss:.4f}+{rollback_threshold})")
+                    print(f"Loss爆炸({', '.join(reasons)})，回滚到step {backup2_step}")
                     model.load_state_dict(model_backup2)
                     model_backup1 = copy.deepcopy(model_backup2)
                     total_step = backup2_step
                     backup1_step = backup2_step
                     backup1_loss = backup2_loss
+                    v_backup1_loss = v_backup2_loss
+                    p_backup1_loss = p_backup2_loss
                 else:
                     model_backup2 = model_backup1
                     backup2_step = backup1_step
                     backup2_loss = backup1_loss
+                    v_backup2_loss = v_backup1_loss
+                    p_backup2_loss = p_backup1_loss
                     model_backup1 = copy.deepcopy(model.state_dict())
                     backup1_step = total_step
                     backup1_loss = total_loss_train
+                    v_backup1_loss = v_loss_train
+                    p_backup1_loss = p_loss_train
 
                 loss_record = [0, 0, 0, 1e-30, 0, 0]
 
