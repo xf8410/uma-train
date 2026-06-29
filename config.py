@@ -345,6 +345,9 @@ Game_Output_C_Value = NN_OUTPUT_C_VALUE
 # 训练超参数
 # ============================================================================
 
+# 随机种子
+SEED = 42
+
 # 学习率
 LEARNING_RATE = 7e-4
 WEIGHT_DECAY = 1e-5

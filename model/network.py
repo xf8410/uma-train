@@ -300,20 +300,24 @@ def load_model(path: str, device: str = "cpu") -> nn.Module:
     return model
 
 
-def save_model(model: nn.Module, path: str, total_step: int = 0):
+def save_model(model: nn.Module, path: str, total_step: int = 0, optimizer=None):
     """保存模型
     
     Args:
         model: 要保存的模型
         path: 保存路径
         total_step: 当前训练步数
+        optimizer: 可选，优化器（用于断点续训时恢复训练状态）
     """
-    torch.save({
+    checkpoint = {
         'totalstep': total_step,
         'state_dict': model.state_dict(),
         'model_type': model.model_type,
         'model_param': model.model_param,
-    }, path)
+    }
+    if optimizer is not None:
+        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+    torch.save(checkpoint, path)
 
 
 if __name__ == "__main__":

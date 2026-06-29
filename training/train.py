@@ -24,7 +24,7 @@ from .dataset import UmaTrainDataset, SelfPlayDataset, generate_random_data
 from model.network import create_model, load_model, save_model, MODEL_DICT
 from config import (
     Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value,
-    LEARNING_RATE, WEIGHT_DECAY, BATCH_SIZE,
+    SEED, LEARNING_RATE, WEIGHT_DECAY, BATCH_SIZE,
     VALUE_LOSS_WEIGHT_MEAN, VALUE_LOSS_WEIGHT_STDEV, VALUE_LOSS_WEIGHT_OPTIMISTIC,
     VALUE_MEAN_OFFSET, VALUE_MEAN_SCALE, VALUE_STDEV_SCALE,
     SAVE_STEP, INFO_STEP,
@@ -33,6 +33,19 @@ from config import (
     VALUE_LOSS_BASE_WEIGHT,
     V_LOSS_ROLLBACK_THRESHOLD, P_LOSS_ROLLBACK_THRESHOLD,
 )
+
+
+
+def seed_everything(seed: int):
+    """设置全局随机种子，确保可复现"""
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def cross_entropy_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -127,6 +140,9 @@ def train(
         lr_scheduler_type: 学习率调度器类型，"cosine"/"step"/空字符串
         early_stop_patience: 早停耐心值，0表示不早停
     """
+    # 设置随机种子，确保可复现
+    seed_everything(SEED)
+
     # 设备
     device = torch.device(f"cuda:{gpu}" if gpu >= 0 and torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
@@ -146,12 +162,16 @@ def train(
     model_path = os.path.join(base_path, "model.pth")
 
     # 加载或创建模型
+    loaded_optimizer_state = None
     if os.path.exists(model_path) and not new_train and save_name != "null":
         model = load_model(model_path, device=str(device))
         model_data = torch.load(model_path, map_location="cpu")
         total_step = model_data['totalstep']
         model_type_loaded = model_data['model_type']
         model_param_loaded = model_data['model_param']
+        # 恢复优化器状态（如果有）
+        if 'optimizer_state_dict' in model_data:
+            loaded_optimizer_state = model_data['optimizer_state_dict']
         print(f"加载模型: type={model_type_loaded}, param={model_param_loaded}, step={total_step}")
     else:
         total_step = 0
@@ -164,6 +184,10 @@ def train(
     lr = LEARNING_RATE * lr_scale
     wd = WEIGHT_DECAY * wd_scale
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    # 断点续训时恢复优化器状态
+    if loaded_optimizer_state is not None:
+        optimizer.load_state_dict(loaded_optimizer_state)
+        print("已恢复优化器状态")
 
     # 学习率调度器
     scheduler = None
@@ -177,9 +201,11 @@ def train(
     best_val_loss = None
     early_stop_counter = 0
 
-    # 回滚备份
+    # 回滚备份（同时备份模型和优化器状态）
     model_backup1 = copy.deepcopy(model.state_dict())
     model_backup2 = copy.deepcopy(model.state_dict())
+    opt_backup1 = copy.deepcopy(optimizer.state_dict())
+    opt_backup2 = copy.deepcopy(optimizer.state_dict())
     backup1_step = start_step
     backup2_step = start_step
     backup1_loss = 1e10
@@ -281,7 +307,9 @@ def train(
                         reasons.append(f"total({total_loss_train:.4f}>{backup1_loss:.4f}+{rollback_threshold})")
                     print(f"Loss爆炸({', '.join(reasons)})，回滚到step {backup2_step}")
                     model.load_state_dict(model_backup2)
+                    optimizer.load_state_dict(opt_backup2)
                     model_backup1 = copy.deepcopy(model_backup2)
+                    opt_backup1 = copy.deepcopy(opt_backup2)
                     total_step = backup2_step
                     backup1_step = backup2_step
                     backup1_loss = backup2_loss
@@ -289,11 +317,13 @@ def train(
                     p_backup1_loss = p_backup2_loss
                 else:
                     model_backup2 = model_backup1
+                    opt_backup2 = opt_backup1
                     backup2_step = backup1_step
                     backup2_loss = backup1_loss
                     v_backup2_loss = v_backup1_loss
                     p_backup2_loss = p_backup1_loss
                     model_backup1 = copy.deepcopy(model.state_dict())
+                    opt_backup1 = copy.deepcopy(optimizer.state_dict())
                     backup1_step = total_step
                     backup1_loss = total_loss_train
                     v_backup1_loss = v_loss_train
@@ -304,7 +334,7 @@ def train(
             # 保存和验证
             if total_step % save_step == 0 or total_step - start_step >= max_step:
                 print(f"保存模型 step={total_step}")
-                save_model(model, model_path, total_step)
+                save_model(model, model_path, total_step, optimizer=optimizer)
 
                 # 验证
                 if v_dataset is not None:
@@ -343,7 +373,7 @@ def train(
                                 print(f"早停计数: {early_stop_counter}/{early_stop_patience} (最佳验证loss={best_val_loss:.4f})")
                                 if early_stop_counter >= early_stop_patience:
                                     print(f"早停触发！连续{early_stop_patience}个save_step验证loss未下降，停止训练")
-                                    save_model(model, model_path, total_step)
+                                    save_model(model, model_path, total_step, optimizer=optimizer)
                                     return
 
                     model.train()
