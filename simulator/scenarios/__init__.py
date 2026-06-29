@@ -1,3 +1,4 @@
-"""剧本包"""
-from simulator.scenarios.base import ScenarioBase
-from simulator.scenarios.dreams import DreamsScenario
+"""赛马娘AI训练框架 - 剧本包"""
+from .base import ScenarioBase
+from .dreams import DreamsScenario
+from .ramen import RamenScenario

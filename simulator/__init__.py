@@ -7,3 +7,4 @@ from simulator.bad_condition import BadConditionType, BadCondition, BadCondition
 from simulator.formula import FormulaLayer, MOTIVATION_MULTIPLIER, MOTIVATION_REST_VITAL
 from simulator.scenarios.base import ScenarioBase
 from simulator.scenarios.dreams import DreamsScenario
+from simulator.scenarios.ramen import RamenScenario
