@@ -10,6 +10,7 @@
   - 实测统计的失败率映射表
 """
 
+import logging
 import math
 from typing import List, Optional, Tuple
 
@@ -18,6 +19,8 @@ from config import (
     FAIL_RATE_BASIC, TRAINING_BASIC_VALUE,
     TOTAL_TURN, BASIC_FIVE_STATUS_LIMIT,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -42,6 +45,34 @@ MOTIVATION_REST_VITAL = {
     4: 65,   # 好調
     5: 70,   # 絶好調
 }
+
+
+# ============================================================================
+# condition_set_id → (train_idx, level) 完整显式查找表
+# ============================================================================
+# 每个condition_set_id直接映射到对应的(train_idx, level)，不做fallback计算。
+# 注意：部分condition_set_id在FAIL_RATE_BASIC中存在碰撞
+#   （如520同时对应速度Lv0和力量Lv1），但由于碰撞的ID对应相同的
+#   FAIL_RATE_BASIC值，x0计算结果一致，dict覆盖不影响正确性。
+# 未知condition_set_id使用默认失败率0.1（10%）并打印warning日志。
+#
+# 数据来源：FAIL_RATE_BASIC[train_idx][level] 即为对应的condition_set_id
+
+CSID_TO_TRAIN_LEVEL = {
+    # 速度 (train_idx=0)
+    520: (0, 0), 524: (0, 1), 528: (0, 2), 532: (0, 3), 536: (0, 4),
+    # 耐力 (train_idx=1)
+    507: (1, 0), 511: (1, 1), 515: (1, 2), 519: (1, 3), 523: (1, 4),
+    # 力量 (train_idx=2) — 520/524/528/532与速度碰撞，FAIL_RATE_BASIC值相同，覆盖无影响
+    516: (2, 0), 520: (2, 1), 524: (2, 2), 528: (2, 3), 532: (2, 4),
+    # 根性 (train_idx=3) — 532/536与速度/力量碰撞，FAIL_RATE_BASIC值相同，覆盖无影响
+    532: (3, 0), 536: (3, 1), 540: (3, 2), 544: (3, 3), 548: (3, 4),
+    # 智力 (train_idx=4)
+    320: (4, 0), 321: (4, 1), 322: (4, 2), 323: (4, 3), 324: (4, 4),
+}
+
+# 未知condition_set_id的默认失败率（百分比）
+CSID_DEFAULT_FAIL_RATE = 10
 
 
 # ============================================================================
@@ -125,8 +156,9 @@ def calc_fail_rate_from_condition_set(
 ) -> int:
     """从condition_set_id计算失败率（备用方案）
 
-    condition_set_id 507-548 对应不同训练类型和等级。
-    当无法使用训练等级信息时，直接从condition_set_id推算。
+    通过CSID_TO_TRAIN_LEVEL显式查找表，将condition_set_id映射到
+    (train_idx, level)，再计算失败率。
+    不做fallback推算，未知ID使用默认失败率并打印warning。
 
     Args:
         condition_set_id: MasterDB中的condition_set_id
@@ -136,26 +168,19 @@ def calc_fail_rate_from_condition_set(
     Returns:
         失败率百分比
     """
-    # condition_set_id → (train_idx, level) 映射
-    # 507-511: 耐力Lv0-4, 516-520: 力量Lv0-4, 520-536: 速度Lv0-4, 532-548: 根性Lv0-4
-    csid_map = {}
-    for lv in range(5):
-        csid_map[507 + lv * 4] = (1, lv)   # 耐力
-        csid_map[516 + lv * 4] = (2, lv)   # 力量
-        csid_map[520 + lv * 4] = (3, lv)   # 速度
-        csid_map[532 + lv * 4] = (4, lv)   # 根性
+    if condition_set_id in CSID_TO_TRAIN_LEVEL:
+        train_idx, level = CSID_TO_TRAIN_LEVEL[condition_set_id]
+        x0 = 0.1 * FAIL_RATE_BASIC[train_idx][level]
+        if vital >= x0:
+            return 0
+        return max(0, min(100, int((100.0 - vital) * (x0 - vital) / 40.0)))
 
-    if condition_set_id in csid_map:
-        train_idx, level = csid_map[condition_set_id]
-    else:
-        # fallback: 从id范围估算
-        train_idx = min(4, max(0, (condition_set_id - 507) // 8))
-        level = min(4, max(0, (condition_set_id - 507) % 5))
-
-    x0 = 0.1 * FAIL_RATE_BASIC[train_idx][level]
-    if vital >= x0:
-        return 0
-    return max(0, min(100, int((100.0 - vital) * (x0 - vital) / 40.0)))
+    # 未知condition_set_id：使用默认失败率并打印warning
+    logger.warning(
+        "未知condition_set_id=%d，使用默认失败率%d%%",
+        condition_set_id, CSID_DEFAULT_FAIL_RATE,
+    )
+    return CSID_DEFAULT_FAIL_RATE
 
 
 # ============================================================================
@@ -179,7 +204,6 @@ def calc_vital_cost(
     """
     return TRAINING_BASIC_VALUE[train_idx][train_level][6]
 
-
 def calc_rest_vital(
     motivation: int,
     is_great_success: bool = False,
@@ -199,7 +223,6 @@ def calc_rest_vital(
     if is_great_success:
         base += 10
     return base
-
 
 def calc_great_success_prob(vital: int, max_vital: int) -> float:
     """お休み大成功概率
