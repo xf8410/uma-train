@@ -211,6 +211,89 @@ SCORING_NORMAL = 0  # 普通(评价点)模式
 SCORING_RACE = 1  # 通用大赛模式
 SCORING_MILE = 2  # 英里模式
 
+# ============================================================================
+# 人员ID常量（原game.py模块级常量）
+# ============================================================================
+
+PSID_NONE = -1        # 未分配
+PSID_NONCARD_YAYOI = 6  # 非卡理事长
+PSID_NONCARD_REPORTER = 7  # 非卡记者
+PSID_NPC = 8          # NPC
+
+# 友人卡类型
+FRIEND_TYPE_NONE = 0
+FRIEND_TYPE_LIANGHUA = 1  # 凉花
+FRIEND_TYPE_YAYOI = 2     # 理事长(秋川)
+
+# ============================================================================
+# 魔法数字提取（含中文注释说明来源和含义）
+# ============================================================================
+
+# 属性2倍率阈值：属性值>1200后，每2点只算1点（游戏机制）
+PROPERTY_DOUBLE_THRESHOLD = 1200
+
+# 失败率公式分母（来源：反编译确认的CY公式）
+FAIL_RATE_FORMULA_DENOM = 40.0
+
+# URA结算技能分（第三年URA结算固定+170技能分）
+URA_SKILL_SCORE = 170
+
+# 初始技能分公式系数（3星以上: 170*(stars-2), 以下: 120*stars）
+INITIAL_SKILL_SCORE_HIGH = 170
+INITIAL_SKILL_SCORE_LOW = 120
+
+# 评分：属性>100部分的倍率（来源：评价点计算公式）
+SCORE_ABOVE_100_MULT = 1.1
+
+# 评分：属性权重 [速,耐,力,根,智]（用于_final_score_sum）
+SCORING_WEIGHTS = [5, 3, 3, 3, 3]
+
+# 属性上限超过1200后的折半系数（来源：游戏机制，>1200后每2点算1点）
+PROPERTY_HALVE_THRESHOLD = 1200
+
+# 非卡理事长出现概率权重（5个训练各100，不出现200）
+NONCARD_YAYOI_WEIGHTS = [100, 100, 100, 100, 100, 200]
+
+# NPC出现概率权重（5个训练各100，不出现100）
+NPC_DISTRIBUTION_WEIGHTS = [100, 100, 100, 100, 100, 100]
+
+# 随机事件概率
+RANDOM_EVENT_PROB = 0.35  # 支援卡连续事件触发概率
+MOTIVATION_DOWN_PROB = 0.04  # やる気下降事件概率
+CHARA_EVENT_PROB = 0.1  # 马娘随机事件概率
+VITAL_EVENT_SMALL_PROB = 0.10  # 小体力事件概率(+5)
+VITAL_EVENT_BIG_PROB = 0.02  # 大体力事件概率(+30)
+MOTIVATION_UP_EVENT_PROB = 0.02  # やる気上升事件概率
+
+# 人头hint基础概率
+HINT_BASE_PROB = 0.06
+
+# overdrive拉人防死循环上限
+OVERDRIVE_INVITE_MAX_TRY = 1000
+
+# 种马蓝因子属性上限加成系数
+ZHONGMA_BLUE_LIMIT_FACTOR = 5.34
+ZHONGMA_BLUE_LIMIT_MULT = 2  # 种马蓝因子上限倍率
+
+# Dreams研究等级上限（按回合区间）
+MECHA_RIVAL_LV_LIMITS = [(24, 200), (36, 300), (48, 400), (60, 500), (72, 600), (999, 700)]
+
+# Dreams齿轮加成（按回合区间，来源：反编译）
+MECHA_GEAR_BONUS_TABLE = [(12, 3), (24, 6), (36, 10), (48, 16), (60, 20), (72, 25), (999, 30)]
+
+# overdrive倍率
+OVERDRIVE_TRAIN_MULT = 1.25
+
+# overdrive EN消耗
+OVERDRIVE_EN_COST = 3
+
+# URA回合开始
+URA_START_TURN = 72
+
+# 研究等级提升量bonus表（来源：反编译）
+MECHA_LV_GAIN_BONUS_TABLE = {5: 40, 4: 33, 3: 26, 2: 18, 1: 10}
+
+
 
 # ============================================================================
 # 神经网络输入输出维度
