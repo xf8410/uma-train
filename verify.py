@@ -74,17 +74,17 @@ def test_model():
         return
     
     from model.network import create_model
-    from config import Game_Input_C, Game_Output_C
+    from config import NN_INPUT_C, NN_OUTPUT_C
     
     model = create_model('ems')
     batch_size = 4
-    x = torch.randn(batch_size, Game_Input_C)
+    x = torch.randn(batch_size, NN_INPUT_C)
     
     model.eval()
     with torch.no_grad():
         output = model(x)
     
-    assert output.shape == (batch_size, Game_Output_C), f"输出形状错误: {output.shape}"
+    assert output.shape == (batch_size, NN_OUTPUT_C), f"输出形状错误: {output.shape}"
     print(f"  输入形状: {x.shape}")
     print(f"  输出形状: {output.shape}")
     print(f"  模型大小: {model.get_model_size_kb():.1f} KB")
@@ -514,12 +514,12 @@ def test_training_loss():
         return
 
     from training.train import calculate_loss
-    from config import Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value
+    from config import NN_OUTPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE
 
     batch_size = 8
-    output = torch.randn(batch_size, Game_Output_C)
-    label_policy = torch.nn.functional.softmax(torch.randn(batch_size, Game_Output_C_Policy), dim=1)
-    label_value = torch.randn(batch_size, Game_Output_C_Value) * 100 + 38000
+    output = torch.randn(batch_size, NN_OUTPUT_C)
+    label_policy = torch.nn.functional.softmax(torch.randn(batch_size, NN_OUTPUT_C_POLICY), dim=1)
+    label_value = torch.randn(batch_size, NN_OUTPUT_C_VALUE) * 100 + 38000
     label = torch.cat([label_policy, label_value], dim=1)
 
     v_loss, p_loss = calculate_loss(output, label)
@@ -539,6 +539,271 @@ def test_training_loss():
 
     print('  [PASS] 训练损失计算测试通过!')
 
+
+
+# ============================================================
+# P2-1新增测试组：搜索结果合理性、自我对弈标签、完整流程、Welford统计、config拆分
+# ============================================================
+
+def test_mcts_search_result_sanity():
+    """P2-1新增: MCTS搜索结果合理性 — value范围、策略概率和、合法动作数"""
+    print('\n=== 测试MCTS搜索结果合理性 ===')
+    from simulator.game import Game
+    from search.mcts import MCTS, SearchParam
+    from model.handwritten import HandwrittenEvaluator
+
+    rng = random.Random(42)
+    game = Game()
+    game.new_game(rng)
+
+    evaluator = HandwrittenEvaluator()
+    mcts = MCTS(evaluator=evaluator)
+    param = SearchParam(search_single_max=4, max_depth=1)
+
+    action = mcts.run_search(game, rng, param)
+
+    # 1. 合法动作数 > 0
+    legal_count = sum(1 for r in mcts.all_action_results if r.is_legal)
+    assert legal_count > 0, f'合法动作数应>0, 实际{legal_count}'
+    print(f'  合法动作数: {legal_count}')
+
+    # 2. 搜索结果的value值在合理范围（0到MAX_SCORE）
+    from config import MAX_SCORE
+    for i, r in enumerate(mcts.all_action_results):
+        if not r.is_legal or r._count <= 0:
+            continue
+        val = r.get_weighted_mean_score(1.0)
+        assert 0 <= val.score_mean <= MAX_SCORE, \
+            f'动作{i}的score_mean={val.score_mean}超出合理范围[0,{MAX_SCORE}]'
+        assert val.score_stdev >= 0, \
+            f'动作{i}的score_stdev={val.score_stdev}应为非负'
+    print(f'  所有合法动作value在合理范围: OK')
+
+    # 3. 导出训练样本的policy概率和为1
+    sample = mcts.export_training_sample()
+    policy_sum = sum(sample['policy'])
+    assert abs(policy_sum - 1.0) < 1e-4, f'策略概率和应为1, 实际{policy_sum}'
+    print(f'  策略概率和: {policy_sum:.6f} (接近1)')
+
+    # 4. value字段长度为3且值合理
+    value = sample['value']
+    assert len(value) == 3, f'value维度应为3, 实际{len(value)}'
+    assert -200 < value[0] < 200, f'value[0]={value[0]}超出合理范围'
+    assert value[1] >= 0, f'stdev应为非负, 实际{value[1]}'
+    assert -200 < value[2] < 200, f'value[2]={value[2]}超出合理范围'
+    print(f'  value字段: mean={value[0]:.2f}, stdev={value[1]:.2f}, optimistic={value[2]:.2f}')
+
+    print('  [PASS] MCTS搜索结果合理性测试通过!')
+
+
+def test_selfplay_value_labels():
+    """P2-1新增: 自我对弈value标签 — sample中value/policy/stdev字段存在且合理"""
+    print('\n=== 测试自我对弈value标签 ===')
+    import importlib.util
+    import random
+    from simulator.game import Game
+    from search.mcts import MCTS, SearchParam
+    from search.search_result import ModelOutputValue
+    from model.nn_input import encode_game_state
+    from model.handwritten import HandwrittenEvaluator
+    from config import TOTAL_TURN, NN_INPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE, HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR
+
+    # 直接加载selfplay模块，避免train.py的torch依赖
+    spec = importlib.util.spec_from_file_location('selfplay', './training/selfplay.py')
+    sp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sp)
+
+    rng = random.Random(42)
+    evaluator = HandwrittenEvaluator()
+    param = SearchParam(search_single_max=4, max_depth=1)
+    worker = sp.SelfPlayWorker(search_param=param, evaluator=evaluator)
+    samples = worker.play_game(rng)
+
+    assert len(samples) > 0, '应生成至少1个样本'
+    print(f'  生成样本数: {len(samples)}')
+
+    # 检查关键字段
+    for i, s in enumerate(samples):
+        # value字段存在且合理
+        assert 'value' in s, f'样本{i}缺少value字段'
+        v = s['value']
+        assert len(v) == 3, f'样本{i}的value维度应为3, 实际{len(v)}'
+        assert v[1] >= 0, f'样本{i}的stdev={v[1]}应为非负'
+
+        # policy字段存在且概率和约等于1
+        assert 'policy' in s, f'样本{i}缺少policy字段'
+        p = s['policy']
+        assert len(p) == NN_OUTPUT_C_POLICY, f'样本{i}的policy维度应为{NN_OUTPUT_C_POLICY}'
+        psum = sum(p)
+        assert abs(psum - 1.0) < 0.01, f'样本{i}的策略概率和={psum}不接近1'
+
+        # stdev字段（mcts_search_stdev）存在
+        assert 'mcts_search_stdev' in s, f'样本{i}缺少mcts_search_stdev字段'
+
+    print(f'  所有{len(samples)}个样本value/policy/stdev字段完整且合理')
+
+    # 最终评分>0
+    final = samples[0].get('final_score', 0)
+    assert final > 0, f'最终评分应>0, 实际{final}'
+    print(f'  最终评分: {final} (>0)')
+
+    print('  [PASS] 自我对弈value标签测试通过!')
+
+
+def test_full_game_78turns():
+    """P2-1新增: 多回合完整流程 — 跑完整78回合育成，确认不crash且最终评分>0"""
+    print('\n=== 测试完整78回合育成 ===')
+    try:
+        import torch
+        has_torch = True
+    except ImportError:
+        has_torch = False
+
+    if not has_torch:
+        print('  [INFO] 无PyTorch，使用手写逻辑跑完整育成（可能较慢）')
+
+    import random
+    from simulator.game import Game
+    from search.mcts import MCTS, SearchParam
+    from model.handwritten import HandwrittenEvaluator
+    from config import TOTAL_TURN
+
+    rng = random.Random(99)
+    game = Game()
+    game.new_game(rng)
+
+    evaluator = HandwrittenEvaluator()
+    # 用极少搜索量加快速度
+    mcts = MCTS(evaluator=evaluator)
+    param = SearchParam(search_single_max=2, max_depth=1, search_group_size=1)
+
+    turn_count = 0
+    while not game.is_end():
+        action = mcts.run_search(game, rng, param)
+        assert action is not None, f'第{turn_count}回合搜索返回None'
+        assert game.is_legal(action), f'第{turn_count}回合搜索返回不合法动作'
+        game.apply_action(rng, action)
+        turn_count += 1
+
+    assert game.turn == TOTAL_TURN, f'游戏回合数应为{TOTAL_TURN}, 实际{game.turn}'
+    score = game.final_score()
+    assert score > 0, f'最终评分应>0, 实际{score}'
+    print(f'  完整{turn_count}回合育成: 评分={score} (>0), 无crash')
+
+    print('  [PASS] 完整78回合育成测试通过!')
+
+
+def test_search_result_welford():
+    """P2-1新增: SearchResult Welford统计 — 添加少量结果后检查mean/stdev/count"""
+    print('\n=== 测试SearchResult Welford统计 ===')
+    import math
+    from search.search_result import SearchResult, ModelOutputValue
+    from config import NORM_DISTRIBUTION_SAMPLING, MAX_SCORE
+
+    sr = SearchResult()
+    sr.is_legal = True
+
+    # 添加第一个结果: mean=40000, stdev=200
+    v1 = ModelOutputValue(score_mean=40000.0, score_stdev=200.0, value=40000.0)
+    sr.add_result(v1)
+    n = NORM_DISTRIBUTION_SAMPLING  # 128
+    assert sr._count == n, f'添加1次后count应为{n}, 实际{sr._count}'
+    assert abs(sr._mean - 40000.0) < 1e-6, f'mean应为40000, 实际{sr._mean}'
+    expected_m2 = n * 200.0 * 200.0
+    assert abs(sr._m2 - expected_m2) < 1e-6, f'm2应为{expected_m2}, 实际{sr._m2}'
+    print(f'  添加1个结果: count={sr._count}, mean={sr._mean:.1f}, m2={sr._m2:.1f}')
+
+    # 添加第二个结果: mean=38000, stdev=300
+    v2 = ModelOutputValue(score_mean=38000.0, score_stdev=300.0, value=38000.0)
+    sr.add_result(v2)
+    n2 = n
+    n_combined = n + n2  # 256
+    expected_mean = 40000.0 + n2 * (38000.0 - 40000.0) / n_combined  # 39000
+    m2_1 = n * 200.0**2
+    m2_2 = n2 * 300.0**2
+    delta = 38000.0 - 40000.0
+    expected_m2 = m2_1 + m2_2 + n * n2 * delta**2 / n_combined
+    assert sr._count == n_combined, f'count应为{n_combined}, 实际{sr._count}'
+    assert abs(sr._mean - expected_mean) < 1e-6, f'mean应为{expected_mean}, 实际{sr._mean}'
+    assert abs(sr._m2 - expected_m2) < 1e-3, f'm2应为{expected_m2}, 实际{sr._m2}'
+    expected_stdev = math.sqrt(expected_m2 / n_combined)
+    val = sr.get_weighted_mean_score(1.0)
+    assert abs(val.score_stdev - expected_stdev) < 0.01, \
+        f'stdev应为{expected_stdev:.2f}, 实际{val.score_stdev:.2f}'
+    print(f'  添加2个结果: count={sr._count}, mean={sr._mean:.1f}, stdev={val.score_stdev:.2f}')
+
+    # 验证min/max
+    lo1 = max(0, 40000 - 3.5 * 200)
+    hi1 = min(MAX_SCORE - 1, 40000 + 3.5 * 200)
+    lo2 = max(0, 38000 - 3.5 * 300)
+    hi2 = min(MAX_SCORE - 1, 38000 + 3.5 * 300)
+    assert abs(sr._min - min(lo1, lo2)) < 1e-6, f'min应为{min(lo1,lo2)}, 实际{sr._min}'
+    assert abs(sr._max - max(hi1, hi2)) < 1e-6, f'max应为{max(hi1,hi2)}, 实际{sr._max}'
+    print(f'  min={sr._min:.1f}, max={sr._max:.1f}')
+
+    # 添加第三个结果验证继续正确
+    v3 = ModelOutputValue(score_mean=42000.0, score_stdev=100.0, value=42000.0)
+    sr.add_result(v3)
+    n3 = n
+    n_total = n_combined + n3  # 384
+    expected_mean3 = expected_mean + n3 * (42000.0 - expected_mean) / n_total
+    delta3 = 42000.0 - expected_mean
+    m2_3 = n3 * 100.0**2
+    expected_m2_3 = expected_m2 + m2_3 + n_combined * n3 * delta3**2 / n_total
+    assert abs(sr._mean - expected_mean3) < 1e-4, f'3次后mean应为{expected_mean3}, 实际{sr._mean}'
+    assert abs(sr._m2 - expected_m2_3) < 1e-2, f'3次后m2应为{expected_m2_3}, 实际{sr._m2}'
+    print(f'  添加3个结果: count={sr._count}, mean={sr._mean:.2f}, m2={sr._m2:.2f}')
+
+    print('  [PASS] SearchResult Welford统计测试通过!')
+
+
+def test_config_split():
+    """P2-1新增: config拆分验证 — from config import *和from config_nn import都能工作"""
+    print('\n=== 测试config拆分验证 ===')
+
+    # 1. from config import * 应能拿到所有常量
+    from config import (
+        TOTAL_TURN, MAX_SCORE, NN_INPUT_C, NN_OUTPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE,
+        HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR, NORM_DISTRIBUTION_SAMPLING,
+        SEARCH_SINGLE_MAX, MCTS_POLICY_TEMPERATURE, LEARNING_RATE, BATCH_SIZE,
+        SCORE_PT_RATE_DEFAULT, FAIL_RATE_FORMULA_DENOM,
+        MODEL_SIZE_LIMIT, DEFAULT_ENCODER_BLOCKS, VALUE_MEAN_OFFSET, VALUE_MEAN_SCALE,
+    )
+    assert TOTAL_TURN == 78, f'TOTAL_TURN应为78, 实际{TOTAL_TURN}'
+    assert NN_INPUT_C > 0, f'NN_INPUT_C应>0'
+    assert NN_OUTPUT_C_POLICY > 0, f'NN_OUTPUT_C_POLICY应>0'
+    assert NN_OUTPUT_C_VALUE > 0, f'NN_OUTPUT_C_VALUE应>0'
+    print(f'  config.* 可用: TOTAL_TURN={TOTAL_TURN}, NN_INPUT_C={NN_INPUT_C}, '
+          f'NN_OUTPUT_C={NN_OUTPUT_C}, LEARNING_RATE={LEARNING_RATE}')
+
+    # 2. from config_nn import NN_INPUT_C 也能工作
+    from config_nn import NN_INPUT_C as nn_input_c_direct
+    assert nn_input_c_direct == NN_INPUT_C, \
+        f'config_nn.NN_INPUT_C={nn_input_c_direct} != config.NN_INPUT_C={NN_INPUT_C}'
+    print(f'  config_nn.NN_INPUT_C = {nn_input_c_direct} (与config一致)')
+
+    # 3. 从各子模块能独立导入
+    from config_game import TOTAL_TURN as tt, MAX_SCORE as ms
+    from config_nn import NN_OUTPUT_C as no, MODEL_SIZE_LIMIT as msl
+    from config_mcts import SEARCH_SINGLE_MAX as ssm, MCTS_POLICY_TEMPERATURE as mpt
+    from config_train import LEARNING_RATE as lr, BATCH_SIZE as bs
+    assert tt == 78 and ms == 60000
+    assert no == 56 and msl == 376 * 1024
+    assert ssm == 256 and mpt == 1.0
+    assert lr == 7e-4 and bs == 1024
+    print(f'  各子模块独立导入: config_game(TOTAL_TURN={tt}), '
+          f'config_nn(NN_OUTPUT_C={no}), config_mcts(SEARCH_SINGLE_MAX={ssm}), '
+          f'config_train(LEARNING_RATE={lr})')
+
+    # 4. 验证config_nn独立导入NN维度常量
+    from config_nn import NN_INPUT_C_GLOBAL, NN_INPUT_C_BC, NN_INPUT_C_RAMEN
+    assert NN_INPUT_C_GLOBAL == 156, f'NN_INPUT_C_GLOBAL应为156, 实际{NN_INPUT_C_GLOBAL}'
+    assert NN_INPUT_C_BC == 8, f'NN_INPUT_C_BC应为8, 实际{NN_INPUT_C_BC}'
+    assert NN_INPUT_C_RAMEN == 16, f'NN_INPUT_C_RAMEN应为16, 实际{NN_INPUT_C_RAMEN}'
+    print(f'  config_nn维度明细: GLOBAL={NN_INPUT_C_GLOBAL}, BC={NN_INPUT_C_BC}, RAMEN={NN_INPUT_C_RAMEN}')
+
+    print('  [PASS] config拆分验证测试通过!')
+
 if __name__ == "__main__":
     test_game()
     test_mcts()
@@ -551,6 +816,12 @@ if __name__ == "__main__":
     test_handwritten_evaluator()
     test_nn_input_encoding()
     test_training_loss()
+    # P2-1新增测试
+    test_mcts_search_result_sanity()
+    test_selfplay_value_labels()
+    test_full_game_78turns()
+    test_search_result_welford()
+    test_config_split()
     print()
     print("="*50)
     print("全部验收通过! ✓")
