@@ -184,7 +184,7 @@ def check_fixed_events(game, rng):
 
 def check_event_after_train(game, rng):
     """训练后检查事件并推进回合"""
-    game.mecha_overdrive_enabled = False
+    # P1-4修复: overdrive关闭已移至random_distribute_cards开头的恢复逻辑，不在事件后立即关闭
     maybe_update_deyilv(game)
     check_fixed_events(game, rng)
     check_random_events(game, rng)
@@ -228,6 +228,22 @@ def handle_friend_click_event(game, rng, at_train: int):
             game.add_motivation(1)
 
 
+def _yayoi_outing_5(game, rng):
+    """P1-10修复: Yayoi第5次外出，用单次随机判定保证结果一致性"""
+    is_great = rng.random() < 0.75
+    if is_great:
+        game.add_vital_friend(30)
+        game.add_status_friend(3, 36)
+        game.skill_pt += 72
+        game.is_refresh_mind = True
+    else:
+        game.add_vital_friend(26)
+        game.add_status_friend(3, 24)
+        game.skill_pt += 40
+    game.add_motivation(1)
+    game.add_ji_ban(game.friend_person_id, 5)
+
+
 def handle_friend_outgoing(game, rng):
     """友人外出"""
     if game.friend_type == FRIEND_TYPE_YAYOI:
@@ -237,11 +253,8 @@ def handle_friend_outgoing(game, rng):
             lambda: (game.add_vital_friend(30), game.add_motivation(1), game.add_status_friend(0, 10), game.add_status_friend(3, 10), setattr(game, 'is_refresh_mind', True), game.add_ji_ban(game.friend_person_id, 5)),
             lambda: (game.add_vital_friend(43) if game.max_vital - game.vital >= 20 else game.add_status_friend(3, 29), game.add_motivation(1), game.add_ji_ban(game.friend_person_id, 5)),
             lambda: (game.add_vital_friend(30), game.add_motivation(1), game.add_status_friend(3, 25), game.add_ji_ban(game.friend_person_id, 5)),
-            lambda: (game.add_vital_friend(30) if rng.random() < 0.75 else game.add_vital_friend(26),
-                     game.add_status_friend(3, 36 if rng.random() < 0.75 else 24),
-                     setattr(game, 'skill_pt', game.skill_pt + (72 if rng.random() < 0.75 else 40)),
-                     game.add_motivation(1), game.add_ji_ban(game.friend_person_id, 5),
-                     setattr(game, 'is_refresh_mind', True) if rng.random() < 0.75 else None),
+            # P1-10修复: 第5次外出用单次随机判定，避免体力/属性/pt结果不一致
+            lambda: _yayoi_outing_5(game, rng),
         ]
         if game.friend_outgoing_used < len(outings):
             outings[game.friend_outgoing_used]()

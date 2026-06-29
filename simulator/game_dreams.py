@@ -158,9 +158,10 @@ def init_mecha(game, rng):
     game.mecha_win_history = [0] * 5
     game.mecha_any_lose = False
 
-    # Link效果
-    for i in range(7):
-        chara = game.persons[i].card_param.chara_id if i < 6 else game.uma_id
+    # P1-9修复: Link效果循环，防止persons长度不足6时越界
+    # 支援卡(i<6)和马娘自身(i=6)分开处理
+    for i in range(min(6, len(game.persons))):
+        chara = game.persons[i].card_param.chara_id
         if is_link_chara_initial_en(game, chara):
             game.mecha_en += 1
         if is_link_chara_more_gear(game, chara):
@@ -172,6 +173,19 @@ def init_mecha(game, rng):
         if is_link_chara_initial_lv(game, chara):
             for j in range(5):
                 game.mecha_rival_lv[j] += 20
+    # 马娘自身的Link效果
+    chara = game.uma_id
+    if is_link_chara_initial_en(game, chara):
+        game.mecha_en += 1
+    if is_link_chara_more_gear(game, chara):
+        game.mecha_linkeffect_gear_prob_bonus += 1
+    if is_link_chara_initial_overdrive(game, chara):
+        game.mecha_overdrive_energy += 3
+    if is_link_chara_lv_bonus(game, chara):
+        game.mecha_linkeffect_lvbonus = True
+    if is_link_chara_initial_lv(game, chara):
+        for j in range(5):
+            game.mecha_rival_lv[j] += 20
 
     game.mecha_overdrive_energy = min(game.mecha_overdrive_energy, 6)
     game.mecha_en = min(game.mecha_en, 7)
