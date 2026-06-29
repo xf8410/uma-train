@@ -2,6 +2,7 @@
 赛马娘AI训练框架 - NN输入编码
 
 参考 UmaAi 的 NNInput.h 和 Game::getNNInputV1，将游戏状态编码为神经网络输入向量。
+修复P0-7：维度与实际编码严格对齐，无零填充预留空间。
 """
 
 import math
@@ -22,7 +23,10 @@ def encode_game_state(game: Game) -> List[float]:
     """将游戏状态编码为神经网络输入向量
     
     输入结构：
-    (全局信息587维)(支援卡1信息89+12维)...(支援卡6信息89+12维)
+    (全局信息156维)(支援卡1信息38维)...(支援卡6信息38维)
+    
+    全局信息156维 = 基础游戏状态132维 + BC8维 + Ramen16维
+    每卡38维 = 卡片参数26维 + 人头信息12维
     
     参考 UmaAi 的 Game::getNNInputV1
     
@@ -35,7 +39,7 @@ def encode_game_state(game: Game) -> List[float]:
     buf = [0.0] * NN_INPUT_C
     idx = 0
     
-    # ===== 全局信息 (587维) =====
+    # ===== 基础游戏状态 (132维) =====
     # 回合数（归一化）
     buf[idx] = game.turn / TOTAL_TURN; idx += 1
     
@@ -144,7 +148,11 @@ def encode_game_state(game: Game) -> List[float]:
     # 训练倍率
     for i in range(6):
         buf[idx] = game.mecha_training_status_multiplier[i] - 1.0; idx += 1
-    
+
+    # 验证基础游戏状态维度
+    _GLOBAL_BASE_DIM = 132
+    assert idx == _GLOBAL_BASE_DIM, f"基础全局编码维度不匹配: 实际{idx}, 期望{_GLOBAL_BASE_DIM}"
+
     # ===== バッドコンディション状态 (8维) =====
     # 6种状态one-hot
     for bc_type in [BadConditionType.BAD, BadConditionType.LAZY,
@@ -157,7 +165,10 @@ def encode_game_state(game: Game) -> List[float]:
     has_healable = (game.bc_manager.count > 0)
     buf[idx] = 1.0 if has_healable else 0.0; idx += 1
 
-    # ===== Ramen剧本状态 (15维) =====
+    assert idx == _GLOBAL_BASE_DIM + NN_INPUT_C_BC, \
+        f"BC编码维度不匹配: 实际{idx}, 期望{_GLOBAL_BASE_DIM + NN_INPUT_C_BC}"
+
+    # ===== Ramen剧本状态 (16维) =====
     ramen = getattr(game, '_ramen_scenario', None)
     if ramen is not None:
         # 隠し味の秘訣数量（归一化到~50）
@@ -182,13 +193,14 @@ def encode_game_state(game: Game) -> List[float]:
         buf[idx] = feeling_vals[0] / 100.0 if len(feeling_vals) > 0 else 0.0; idx += 1
         buf[idx] = feeling_vals[1] / 100.0 if len(feeling_vals) > 1 else 0.0; idx += 1
     else:
-        # 非Ramen剧本：15维全0
+        # 非Ramen剧本：16维全0
         for _ in range(NN_INPUT_C_RAMEN):
             buf[idx] = 0.0; idx += 1
 
-    # 剩余全局维度用0填充（到NN_INPUT_C_GLOBAL维）
-    # idx目前约132+8+15=155，需要填充到587
-    
+    # 验证全局段总维度（基础+BC+Ramen，无零填充）
+    assert idx == NN_INPUT_C_GLOBAL, \
+        f"全局编码维度不匹配: 实际{idx}, 配置{NN_INPUT_C_GLOBAL}"
+
     # ===== 支援卡信息 =====
     for card_idx in range(NN_CARD_NUM):
         card_start = NN_INPUT_C_GLOBAL + card_idx * NN_INPUT_C_CARDPERSON
@@ -197,7 +209,7 @@ def encode_game_state(game: Game) -> List[float]:
             p = game.persons[card_idx]
             cp = p.card_param
             
-            # 支援卡参数（NN_INPUT_C_CARD=89维）
+            # 支援卡参数（NN_INPUT_C_CARD=26维）
             ci = card_start
             buf[ci] = cp.card_type / 6.0; ci += 1
             buf[ci] = cp.you_qing_basic / 100.0; ci += 1
@@ -217,7 +229,10 @@ def encode_game_state(game: Game) -> List[float]:
             buf[ci] = cp.sai_hou / 50.0; ci += 1
             buf[ci] = cp.event_recovery_amount_up / 50.0; ci += 1
             buf[ci] = cp.event_effect_up / 50.0; ci += 1
-            # 剩余卡片参数用0填充到89维
+
+            # 验证卡片参数维度
+            assert ci - card_start == NN_INPUT_C_CARD, \
+                f"卡片{card_idx}参数维度不匹配: 实际{ci-card_start}, 配置{NN_INPUT_C_CARD}"
             
             # 人头信息（NN_INPUT_C_PERSON=12维）
             pi = card_start + NN_INPUT_C_CARD
@@ -234,11 +249,19 @@ def encode_game_state(game: Game) -> List[float]:
                 )
                 buf[pi] = 1.0 if found else 0.0; pi += 1  # 5-9
             
-            # 闪彩状态 (3维 - 对应卡片类型的训练 + 智力训练)
+            # 闪彩状态 (2维)
             buf[pi] = 1.0 if p.is_card_shining(cp.card_type) else 0.0; pi += 1  # 10
             buf[pi] = 1.0 if p.is_card_shining(4) else 0.0; pi += 1  # 11
             
             # 是否是友人卡
             buf[pi] = 1.0 if p.person_type == PersonType.FRIEND_CARD else 0.0; pi += 1  # 12
-    
+
+            # 验证卡槽总维度（卡片+人头）
+            assert pi - card_start == NN_INPUT_C_CARDPERSON, \
+                f"卡片{card_idx}卡槽维度不匹配: 实际{pi-card_start}, 配置{NN_INPUT_C_CARDPERSON}"
+
+    # 最终维度验证（防止以后再飘）
+    assert len(buf) == NN_INPUT_C, \
+        f"输出维度不匹配: 实际{len(buf)}, 配置{NN_INPUT_C}"
+
     return buf

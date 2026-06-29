@@ -17,7 +17,8 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    Game_Input_C, Game_Input_C_Global, Game_Input_C_Card, Game_Input_C_Person,
+    Game_Input_C, Game_Input_C_Global, Game_Input_C_Card, Game_Input_C_CardPerson,
+    Game_Input_C_Person,
     Game_Card_Num, Game_Head_Num, Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value,
     DEFAULT_ENCODER_BLOCKS, DEFAULT_ENCODER_FEATURES, DEFAULT_MLP_BLOCKS,
     DEFAULT_MLP_FEATURES, DEFAULT_GLOBAL_FEATURES, MODEL_SIZE_LIMIT,
@@ -95,10 +96,9 @@ class ModelEncoderMlpSimple(nn.Module):
     2. Encoder：多组简化的自注意力层，全局信息作为条件
     3. MLP：残差MLP层，输出策略和价值
     
-    输入格式：
-    - x[:, :Game_Input_C_Global] - 全局信息
-    - x[:, Game_Input_C_Global:Game_Input_C_Global+Game_Card_Num*Game_Input_C_Card] - 支援卡参数
-    - x[:, Game_Input_C_Global+Game_Card_Num*Game_Input_C_Card:] - 人头信息
+    输入格式（Game_Head_Num==0时，人头合并到卡槽）：
+    - x[:, :Game_Input_C_Global] - 全局信息（156维）
+    - x[:, Game_Input_C_Global:] - 支援卡信息（6卡x38维/卡）
     
     输出格式：
     - output[:, :Game_Output_C_Policy] - 策略logits (53维)
@@ -119,9 +119,11 @@ class ModelEncoderMlpSimple(nn.Module):
         self.encoder_features = encoder_features
         
         # 输入编码层
+        # 修复P0-7：当Head_Num==0时，每个卡槽包含卡片+人头信息，使用CardPerson维度
+        self._card_input_dim = Game_Input_C_CardPerson if Game_Head_Num == 0 else Game_Input_C_Card
         self.inputhead_global1 = nn.Linear(Game_Input_C_Global, global_features, bias=False)
         self.inputhead_global2 = nn.Linear(global_features, encoder_features, bias=False)
-        self.inputhead_card = nn.Linear(Game_Input_C_Card, encoder_features, bias=False)
+        self.inputhead_card = nn.Linear(self._card_input_dim, encoder_features, bias=False)
         
         if Game_Head_Num != 0:
             self.inputhead_person = nn.Linear(Game_Input_C_Person, encoder_features, bias=False)
@@ -161,7 +163,8 @@ class ModelEncoderMlpSimple(nn.Module):
             x2 = x[:, Game_Input_C_Global:Game_Input_C_Global + Game_Card_Num * Game_Input_C_Card].reshape(-1, Game_Input_C_Card)
             x3 = x[:, Game_Input_C_Global + Game_Card_Num * Game_Input_C_Card:].reshape(-1, Game_Input_C_Person)
         else:
-            x2 = x[:, Game_Input_C_Global:].reshape(-1, Game_Input_C_Card)
+            # 修复P0-7：使用卡槽维度（含人头信息）而非纯卡片维度
+            x2 = x[:, Game_Input_C_Global:].reshape(-1, self._card_input_dim)
         
         # 全局特征
         gf = torch.relu(self.inputhead_global1(x1))

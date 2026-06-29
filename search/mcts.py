@@ -3,6 +3,7 @@
 
 参考 UmaAi 的 Search.h/cpp，实现蒙特卡洛树搜索。
 支持多阶段搜索（先粗后精）、batch推理、手写逻辑fallback。
+修复P1-11：策略软化使用正确的温度softmax替代错误的exp(x/N/delta)。
 """
 
 import math
@@ -18,6 +19,7 @@ from config import (
     TOTAL_TURN, EXPECTED_SEARCH_STDEV,
     SEARCH_STAGE_NUM, SEARCH_FACTOR_STAGE, SEARCH_THRESHOLD_STDEV_STAGE,
     NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE,
+    MCTS_POLICY_TEMPERATURE,
 )
 
 
@@ -320,18 +322,30 @@ class MCTS:
                 msg += f", searchNum={result.num}"
             print(msg)
 
-    def export_training_sample(self, policy_delta: float = 100.0) -> dict:
+    def export_training_sample(self, temperature: float = None) -> dict:
         """导出训练样本
         
+        修复P1-11：使用正确的温度softmax替代错误的exp(visit/total/delta)公式。
+        原公式 exp(visit/N/delta) 当delta=100时所有动作exp值几乎相同，
+        策略退化为均匀分布。
+        
+        正确做法：先归一化为访问比例（logits），再用温度参数做softmax。
+        
+        Args:
+            temperature: 策略温度，None时使用配置默认值MCTS_POLICY_TEMPERATURE
+            
         Returns:
             包含 nn_input, policy, value 的字典
         """
         from model.nn_input import encode_game_state
 
+        if temperature is None:
+            temperature = MCTS_POLICY_TEMPERATURE
+
         # 编码当前局面
         nn_input = encode_game_state(self.root_game)
 
-        # 提取策略
+        # 提取策略：统计每个动作的访问次数
         policy = [0.0] * NN_OUTPUT_C_POLICY
         total_visit = 0
         
@@ -343,17 +357,23 @@ class MCTS:
                 policy[action_int] = result.num
                 total_visit += result.num
 
-        # 策略软化
+        # 策略软化：正确的温度softmax
         if total_visit > 0:
-            for i in range(NN_OUTPUT_C_POLICY):
-                if policy[i] > 0:
-                    # 使用温度参数softmax
-                    policy[i] = math.exp(policy[i] / total_visit / policy_delta)
+            # 1. 归一化为访问比例（logits）
+            logits = [p / total_visit for p in policy]
             
-            total_exp = sum(policy)
+            # 2. 应用温度参数：logits / temperature
+            #    temperature越大策略越均匀，越小越尖锐
+            scaled_logits = [l / temperature for l in logits]
+            
+            # 3. 数值稳定的softmax：减去最大值防止溢出
+            max_logit = max(scaled_logits)
+            exp_vals = [math.exp(sl - max_logit) for sl in scaled_logits]
+            total_exp = sum(exp_vals)
+            
             if total_exp > 0:
                 for i in range(NN_OUTPUT_C_POLICY):
-                    policy[i] /= total_exp
+                    policy[i] = exp_vals[i] / total_exp
 
         # 提取价值
         radical_factor = adjust_radical_factor(
