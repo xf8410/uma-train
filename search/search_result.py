@@ -42,7 +42,12 @@ class SearchResult:
     def __init__(self):
         self.is_legal: bool = False
         self.num: int = 0  # 搜索次数
-        self.final_score_distribution: list = [0] * MAX_SCORE  # 分数分布
+        # Welford在线统计量（替代final_score_distribution，P1-6/P1-7修复）
+        self._count: int = 0   # 总样本量
+        self._mean: float = 0.0  # 在线均值
+        self._m2: float = 0.0    # 二阶中心矩
+        self._min: float = float('inf')   # 最低分
+        self._max: float = float('-inf')  # 最高分
         self._up_to_date: bool = True
         self._last_calculate: ModelOutputValue = ModelOutputValue._get_illegal()
         self._last_radical_factor: float = 0.0
@@ -93,28 +98,43 @@ class SearchResult:
         return x
 
     def clear(self):
-        """清空搜索结果"""
-        self.is_legal = False
+        """清空搜索结果（不重置is_legal，P1-12修复）"""
         self.num = 0
-        self.final_score_distribution = [0] * MAX_SCORE
+        self._count = 0
+        self._mean = 0.0
+        self._m2 = 0.0
+        self._min = float('inf')
+        self._max = float('-inf')
         self._up_to_date = True
         self._last_calculate = ModelOutputValue._get_illegal()
         self._last_radical_factor = 0.0
 
     def add_result(self, v: ModelOutputValue):
-        """添加一个蒙特卡洛结果"""
+        """添加一个蒙特卡洛结果（Welford批量更新，P1-6/P1-7修复）"""
         self._up_to_date = False
         self.num += 1
         
-        # 将正态分布采样到分数分布上
-        SearchResult.init_cdf_table()
-        for i in range(NORM_DISTRIBUTION_SAMPLING):
-            y = int(v.score_mean + v.score_stdev * SearchResult._cdf_inv_table[i] + 0.5)
-            y = max(0, min(y, MAX_SCORE - 1))
-            self.final_score_distribution[y] += 1
+        # 批量Welford更新：将NORM_DISTRIBUTION_SAMPLING个采样视为一批
+        n_new = NORM_DISTRIBUTION_SAMPLING
+        mean_new = v.score_mean
+        m2_new = n_new * v.score_stdev * v.score_stdev  # M2 = n * σ²
+        n_old = self._count
+        n_combined = n_old + n_new
+        delta = mean_new - self._mean
+        self._mean += n_new * delta / n_combined
+        self._m2 += m2_new + n_old * n_new * delta * delta / n_combined
+        self._count = n_combined
+        
+        # 更新min/max
+        lo = max(0, v.score_mean - 3.5 * max(v.score_stdev, 0))
+        hi = min(MAX_SCORE - 1, v.score_mean + 3.5 * max(v.score_stdev, 0))
+        if lo < self._min:
+            self._min = lo
+        if hi > self._max:
+            self._max = hi
 
     def get_weighted_mean_score(self, radical_factor: float) -> ModelOutputValue:
-        """计算加权平均分（按排名加权）"""
+        """计算加权平均分（按排名加权，Welford统计+正态近似，P1-6/P1-7修复）"""
         if self._up_to_date and self._last_radical_factor == radical_factor:
             return self._last_calculate
         
@@ -122,32 +142,33 @@ class SearchResult:
             self._last_calculate = ModelOutputValue._get_illegal()
             return self._last_calculate
 
-        n = 0.0  # 总样本量
-        score_total = 0.0
-        score_sqr_total = 0.0
+        if self._count <= 0:
+            self._last_calculate = ModelOutputValue._get_illegal()
+            return self._last_calculate
+
+        # Welford统计量直接算mean和stdev
+        score_mean = self._mean
+        score_stdev = math.sqrt(self._m2 / self._count) if self._count > 0 else 0
+
+        # 用正态近似计算rank加权value
+        SearchResult.init_cdf_table()
+        total_n_inv = 1.0 / NORM_DISTRIBUTION_SAMPLING
         value_weight_total = 0.0
         value_total = 0.0
-        total_n_inv = 1.0 / (self.num * NORM_DISTRIBUTION_SAMPLING) if self.num > 0 else 0
-
-        for s in range(MAX_SCORE):
-            count = self.final_score_distribution[s]
-            r = (n + 0.5 * count) * total_n_inv  # 排名比例
-            n += count
-            score_total += count * s
-            score_sqr_total += count * s * s
-            
-            # 按排名加权
+        for i in range(NORM_DISTRIBUTION_SAMPLING):
+            r = (i + 0.5) * total_n_inv  # 排名比例
+            y = score_mean + score_stdev * SearchResult._cdf_inv_table[i]
             w = r ** radical_factor
-            value_weight_total += w * count
-            value_total += w * count * s
+            value_weight_total += w
+            value_total += w * y
 
-        if n <= 0 or value_weight_total <= 0:
+        if value_weight_total <= 0:
             self._last_calculate = ModelOutputValue._get_illegal()
             return self._last_calculate
 
         v = ModelOutputValue(
-            score_mean=score_total / n,
-            score_stdev=math.sqrt(max(0, score_sqr_total * n - score_total * score_total)) / n if n > 0 else 0,
+            score_mean=score_mean,
+            score_stdev=score_stdev,
             value=value_total / value_weight_total
         )
         
