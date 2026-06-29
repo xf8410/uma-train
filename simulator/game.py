@@ -163,6 +163,170 @@ class Game:
         if self.formula is None:
             self.formula = FormulaLayer(self.bc_manager)
 
+    def save_snapshot(self) -> dict:
+        """保存当前状态快照，比deepcopy快10-50倍
+
+        数值/枚举字段直接复制，一维列表浅拷贝，
+        二维列表逐行浅拷贝，复杂对象(persons/bc_manager/formula)用deepcopy。
+        """
+        return {
+            # 参数设置
+            "pt_score_rate": self.pt_score_rate,
+            "hint_pt_rate": self.hint_pt_rate,
+            "event_strength": self.event_strength,
+            "scoring_mode": self.scoring_mode,
+            # 基本状态
+            "uma_id": self.uma_id,
+            "is_link_uma": self.is_link_uma,
+            "is_racing_turn": list(self.is_racing_turn),
+            "five_status_bonus": list(self.five_status_bonus),
+            "turn": self.turn,
+            "game_stage": self.game_stage,
+            "vital": self.vital,
+            "max_vital": self.max_vital,
+            "motivation": self.motivation,
+            "five_status": list(self.five_status),
+            "five_status_limit": list(self.five_status_limit),
+            "skill_pt": self.skill_pt,
+            "skill_score": self.skill_score,
+            "train_level_count": list(self.train_level_count),
+            "failure_rate_bias": self.failure_rate_bias,
+            "bc_manager": deepcopy(self.bc_manager),
+            "formula": deepcopy(self.formula),
+            "is_qie_zhe": self.is_qie_zhe,
+            "is_ai_jiao": self.is_ai_jiao,
+            "is_positive_thinking": self.is_positive_thinking,
+            "is_refresh_mind": self.is_refresh_mind,
+            # 种马
+            "zhong_ma_blue_count": list(self.zhong_ma_blue_count),
+            "zhong_ma_extra_bonus": list(self.zhong_ma_extra_bonus),
+            "is_racing": self.is_racing,
+            # 非卡羁绊
+            "friendship_noncard_yayoi": self.friendship_noncard_yayoi,
+            "friendship_noncard_reporter": self.friendship_noncard_reporter,
+            # 人头
+            "persons": deepcopy(self.persons),
+            "person_distribution": [list(row) for row in self.person_distribution],
+            # 赛后加成
+            "saihou": self.saihou,
+            # 友人卡
+            "friend_type": self.friend_type,
+            "friend_is_ssr": self.friend_is_ssr,
+            "friend_person_id": self.friend_person_id,
+            "friend_stage": self.friend_stage,
+            "friend_outgoing_used": self.friend_outgoing_used,
+            "friend_vital_bonus": self.friend_vital_bonus,
+            "friend_status_bonus": self.friend_status_bonus,
+            # 得意率
+            "current_deyilv_bonus": self.current_deyilv_bonus,
+            "current_lianghua_effect_enable": self.current_lianghua_effect_enable,
+            # Dreams剧本相关
+            "mecha_linkeffect_gear_prob_bonus": self.mecha_linkeffect_gear_prob_bonus,
+            "mecha_linkeffect_lvbonus": self.mecha_linkeffect_lvbonus,
+            "mecha_rival_lv": list(self.mecha_rival_lv),
+            "mecha_overdrive_energy": self.mecha_overdrive_energy,
+            "mecha_overdrive_enabled": self.mecha_overdrive_enabled,
+            "mecha_en": self.mecha_en,
+            "mecha_upgrade": [list(row) for row in self.mecha_upgrade],
+            "mecha_has_gear": list(self.mecha_has_gear),
+            "mecha_win_history": list(self.mecha_win_history),
+            "mecha_any_lose": self.mecha_any_lose,
+            # 可计算的非独立信息
+            "train_value": [list(row) for row in self.train_value],
+            "train_vital_change": list(self.train_vital_change),
+            "fail_rate": list(self.fail_rate),
+            "is_train_shining": list(self.is_train_shining),
+            "train_value_lower": [list(row) for row in self.train_value_lower],
+            # 中间变量
+            "mecha_rival_lv_total": self.mecha_rival_lv_total,
+            "mecha_rival_lv_limit": self.mecha_rival_lv_limit,
+            "mecha_upgrade_total": list(self.mecha_upgrade_total),
+            "mecha_lv_gain": [list(row) for row in self.mecha_lv_gain],
+            "mecha_training_status_multiplier": list(self.mecha_training_status_multiplier),
+            "mecha_lv_gain_multiplier": list(self.mecha_lv_gain_multiplier),
+        }
+
+    def restore_snapshot(self, snap: dict):
+        """从快照恢复状态，与save_snapshot逐字段对应
+
+        注意：所有可变字段（列表/对象）都必须创建新副本，
+        否则游戏运行时的原地修改会破坏快照dict。
+        """
+        # 参数设置（不变参数可直接赋值）
+        self.pt_score_rate = snap["pt_score_rate"]
+        self.hint_pt_rate = snap["hint_pt_rate"]
+        self.event_strength = snap["event_strength"]
+        self.scoring_mode = snap["scoring_mode"]
+        # 基本状态
+        self.uma_id = snap["uma_id"]
+        self.is_link_uma = snap["is_link_uma"]
+        self.is_racing_turn = list(snap["is_racing_turn"])
+        self.five_status_bonus = list(snap["five_status_bonus"])
+        self.turn = snap["turn"]
+        self.game_stage = snap["game_stage"]
+        self.vital = snap["vital"]
+        self.max_vital = snap["max_vital"]
+        self.motivation = snap["motivation"]
+        self.five_status = list(snap["five_status"])
+        self.five_status_limit = list(snap["five_status_limit"])
+        self.skill_pt = snap["skill_pt"]
+        self.skill_score = snap["skill_score"]
+        self.train_level_count = list(snap["train_level_count"])
+        self.failure_rate_bias = snap["failure_rate_bias"]
+        self.bc_manager = deepcopy(snap["bc_manager"])
+        self.formula = deepcopy(snap["formula"])
+        self.is_qie_zhe = snap["is_qie_zhe"]
+        self.is_ai_jiao = snap["is_ai_jiao"]
+        self.is_positive_thinking = snap["is_positive_thinking"]
+        self.is_refresh_mind = snap["is_refresh_mind"]
+        # 种马
+        self.zhong_ma_blue_count = list(snap["zhong_ma_blue_count"])
+        self.zhong_ma_extra_bonus = list(snap["zhong_ma_extra_bonus"])
+        self.is_racing = snap["is_racing"]
+        # 非卡羁绊
+        self.friendship_noncard_yayoi = snap["friendship_noncard_yayoi"]
+        self.friendship_noncard_reporter = snap["friendship_noncard_reporter"]
+        # 人头
+        self.persons = deepcopy(snap["persons"])
+        self.person_distribution = [list(row) for row in snap["person_distribution"]]
+        # 赛后加成
+        self.saihou = snap["saihou"]
+        # 友人卡
+        self.friend_type = snap["friend_type"]
+        self.friend_is_ssr = snap["friend_is_ssr"]
+        self.friend_person_id = snap["friend_person_id"]
+        self.friend_stage = snap["friend_stage"]
+        self.friend_outgoing_used = snap["friend_outgoing_used"]
+        self.friend_vital_bonus = snap["friend_vital_bonus"]
+        self.friend_status_bonus = snap["friend_status_bonus"]
+        # 得意率
+        self.current_deyilv_bonus = snap["current_deyilv_bonus"]
+        self.current_lianghua_effect_enable = snap["current_lianghua_effect_enable"]
+        # Dreams剧本相关
+        self.mecha_linkeffect_gear_prob_bonus = snap["mecha_linkeffect_gear_prob_bonus"]
+        self.mecha_linkeffect_lvbonus = snap["mecha_linkeffect_lvbonus"]
+        self.mecha_rival_lv = list(snap["mecha_rival_lv"])
+        self.mecha_overdrive_energy = snap["mecha_overdrive_energy"]
+        self.mecha_overdrive_enabled = snap["mecha_overdrive_enabled"]
+        self.mecha_en = snap["mecha_en"]
+        self.mecha_upgrade = [list(row) for row in snap["mecha_upgrade"]]
+        self.mecha_has_gear = list(snap["mecha_has_gear"])
+        self.mecha_win_history = list(snap["mecha_win_history"])
+        self.mecha_any_lose = snap["mecha_any_lose"]
+        # 可计算的非独立信息
+        self.train_value = [list(row) for row in snap["train_value"]]
+        self.train_vital_change = list(snap["train_vital_change"])
+        self.fail_rate = list(snap["fail_rate"])
+        self.is_train_shining = list(snap["is_train_shining"])
+        self.train_value_lower = [list(row) for row in snap["train_value_lower"]]
+        # 中间变量
+        self.mecha_rival_lv_total = snap["mecha_rival_lv_total"]
+        self.mecha_rival_lv_limit = snap["mecha_rival_lv_limit"]
+        self.mecha_upgrade_total = list(snap["mecha_upgrade_total"])
+        self.mecha_lv_gain = [list(row) for row in snap["mecha_lv_gain"]]
+        self.mecha_training_status_multiplier = list(snap["mecha_training_status_multiplier"])
+        self.mecha_lv_gain_multiplier = list(snap["mecha_lv_gain_multiplier"])
+
     def new_game(self, rng: random.Random, uma_id: int = 0, uma_stars: int = 5,
                  card_ids: Optional[List[int]] = None,
                  zhong_ma_blue: Optional[List[int]] = None,

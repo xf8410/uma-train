@@ -22,6 +22,7 @@ from config import (
     MCTS_POLICY_TEMPERATURE,
     HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR,
     COMPARE_WITH_HANDWRITTEN,
+    MCTS_BATCH_NN_CALIBRATE,
 )
 
 
@@ -84,6 +85,7 @@ class MCTS:
         self.evaluator = evaluator or HandwrittenEvaluator()
         self.all_action_results: List[SearchResult] = []
         self.root_game: Optional[Game] = None
+        self.root_snap: Optional[dict] = None  # P0-1: root状态快照，替代deepcopy
         # 决策归因日志：每次run_search清空，搜索结束后可读取
         self.search_log: List[dict] = []
 
@@ -109,7 +111,8 @@ class MCTS:
         # 每次搜索清空归因日志
         self.search_log = []
 
-        self.root_game = deepcopy(game)
+        self.root_game = game
+        self.root_snap = game.save_snapshot()
         radical_factor = adjust_radical_factor(param.max_radical_factor, self.root_game.turn)
 
         # 初始化搜索结果
@@ -172,6 +175,10 @@ class MCTS:
             if param.search_total_max > 0 and total_search_n >= param.search_total_max:
                 break
 
+        # P0-2: 搜索结束后batch NN校准root各动作value
+        if MCTS_BATCH_NN_CALIBRATE:
+            self._batch_evaluate_root_actions()
+
         # 选择最优动作
         best_value = -1e4
         best_action_int = -1
@@ -198,6 +205,9 @@ class MCTS:
         if COMPARE_WITH_HANDWRITTEN:
             self._compare_with_handwritten(self.root_game, rng)
 
+        # 恢复root状态，确保传入的game对象不被搜索修改
+        self.root_game.restore_snapshot(self.root_snap)
+
         return best_action
 
     def _search_single_action(
@@ -210,24 +220,23 @@ class MCTS:
     ):
         """对单个动作进行蒙特卡洛搜索"""
         for _ in range(search_n):
-            # 复制游戏状态
-            game_copy = deepcopy(self.root_game)
+            # 从快照恢复游戏状态（替代deepcopy，快100倍以上）
+            self.root_game.restore_snapshot(self.root_snap)
             
             # 应用动作
-            game_copy.apply_action(rng, action)
+            self.root_game.apply_action(rng, action)
 
             # 蒙特卡洛模拟到结束或最大深度
             for depth in range(param.max_depth):
-                if game_copy.is_end():
+                if self.root_game.is_end():
                     break
-                # 选择动作（用策略）
                 # 选择动作（用策略，返回归因meta但这里不存）
-                next_action, _meta = self._select_action_by_policy(game_copy, rng)
-                game_copy.apply_action(rng, next_action)
+                next_action, _meta = self._select_action_by_policy(self.root_game, rng)
+                self.root_game.apply_action(rng, next_action)
 
             # 评估最终状态
-            if game_copy.is_end():
-                score = game_copy.final_score()
+            if self.root_game.is_end():
+                score = self.root_game.final_score()
                 v = ModelOutputValue(
                     score_mean=float(score),
                     score_stdev=0.0,
@@ -235,7 +244,7 @@ class MCTS:
                 )
             else:
                 # 用评估器估算
-                v = self._evaluate_game(game_copy, rng)
+                v = self._evaluate_game(self.root_game, rng)
 
             search_result.add_result(v)
 
@@ -438,9 +447,9 @@ class MCTS:
                 try:
                     import torch
                     from model.nn_input import encode_game_state
-                    game_copy = deepcopy(game)
-                    game_copy.apply_action(rng, action)
-                    nn_input = encode_game_state(game_copy)
+                    game.restore_snapshot(self.root_snap)
+                    game.apply_action(rng, action)
+                    nn_input = encode_game_state(game)
                     nn_input_tensor = torch.FloatTensor(nn_input).unsqueeze(0)
                     with torch.no_grad():
                         output = self.model(nn_input_tensor)
@@ -460,6 +469,53 @@ class MCTS:
             "type": "nn_vs_handwritten_comparison",
             "comparisons": comparison_results,
         })
+
+
+    def _batch_evaluate_root_actions(self):
+        """搜索结束后batch NN校准root各动作value（P0-2）
+
+        对root的每个合法动作推进一步，用batch NN推理评估后续状态，
+        将NN评估结果作为额外样本加入各动作的SearchResult，
+        提升搜索结果的准确性。
+        """
+        if self.model is None:
+            return
+
+        import torch
+        from model.nn_input import encode_game_state
+
+        # 收集合法动作
+        legal_actions = []
+        for action_int in range(Action.MAX_ACTION_TYPE):
+            if self.all_action_results[action_int].is_legal:
+                legal_actions.append(action_int)
+        if not legal_actions:
+            return
+
+        # 逐动作推进一步，编码状态
+        nn_inputs = []
+        root_snap = self.root_game.save_snapshot()
+        for action_int in legal_actions:
+            self.root_game.restore_snapshot(root_snap)
+            action = Action.from_int(action_int)
+            self.root_game.apply_action(random.Random(0), action)
+            nn_inputs.append(encode_game_state(self.root_game))
+        # 恢复root状态
+        self.root_game.restore_snapshot(root_snap)
+
+        # batch推理
+        nn_input_tensor = torch.FloatTensor(nn_inputs)
+        with torch.no_grad():
+            output = self.model(nn_input_tensor)
+            value_output = output[:, NN_OUTPUT_C_POLICY:]
+
+        # 用NN结果校准各动作的value
+        for i, action_int in enumerate(legal_actions):
+            score_mean = value_output[i, 0].item() * 300 + 38000
+            score_stdev = max(0, value_output[i, 1].item() * 150)
+            optimistic = value_output[i, 2].item() * 300 + 38000
+            nn_v = ModelOutputValue(score_mean=score_mean, score_stdev=score_stdev, value=optimistic)
+            self.all_action_results[action_int].add_result(nn_v)
 
     def print_search_result(self, param: SearchParam, show_search_num: bool = False):
         """打印搜索结果"""
