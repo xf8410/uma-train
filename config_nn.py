@@ -37,18 +37,6 @@ NN_OUTPUT_C_POLICY = 53  # 策略维度（标准动作数）
 NN_OUTPUT_C_VALUE = 3  # 价值维度（平均分、标准差、乐观分）
 NN_OUTPUT_C = NN_OUTPUT_C_POLICY + NN_OUTPUT_C_VALUE
 
-# 兼容旧版变量名
-Game_Input_C = NN_INPUT_C
-Game_Input_C_Global = NN_INPUT_C_GLOBAL
-Game_Input_C_Card = NN_INPUT_C_CARD
-Game_Input_C_CardPerson = NN_INPUT_C_CARDPERSON  # 卡槽维度（卡片+人头，用于network输入层）
-Game_Input_C_Person = NN_INPUT_C_PERSON
-Game_Card_Num = NN_CARD_NUM
-Game_Head_Num = NN_HEAD_NUM
-Game_Output_C = NN_OUTPUT_C
-Game_Output_C_Policy = NN_OUTPUT_C_POLICY
-Game_Output_C_Value = NN_OUTPUT_C_VALUE
-
 # ============================================================================
 # 模型架构参数
 # ============================================================================

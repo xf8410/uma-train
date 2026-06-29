@@ -9,15 +9,15 @@ import torch
 from torch.utils.data import Dataset
 import os
 
-from config import Game_Input_C, Game_Output_C, Game_Output_C_Policy
+from config import NN_INPUT_C, NN_OUTPUT_C, NN_OUTPUT_C_POLICY
 
 
 class UmaTrainDataset(Dataset):
     """赛马娘训练数据集
     
     支持UmaAi格式的npz文件，包含:
-    - x: 神经网络输入 (N, Game_Input_C)
-    - label: 标签 (N, Game_Output_C)，前Game_Output_C_Policy维为策略，后3维为价值
+    - x: 神经网络输入 (N, NN_INPUT_C)
+    - label: 标签 (N, NN_OUTPUT_C)，前NN_OUTPUT_C_POLICY维为策略，后3维为价值
     """
     
     def __init__(self, npz_path: str, sampling: float = 1.0):
@@ -78,8 +78,8 @@ class SelfPlayDataset(Dataset):
             self.x = np.concatenate(self.x_list, axis=0)
             self.label = np.concatenate(self.label_list, axis=0)
         else:
-            self.x = np.zeros((0, Game_Input_C), dtype=np.float32)
-            self.label = np.zeros((0, Game_Output_C), dtype=np.float32)
+            self.x = np.zeros((0, NN_INPUT_C), dtype=np.float32)
+            self.label = np.zeros((0, NN_OUTPUT_C), dtype=np.float32)
     
     def __getitem__(self, index):
         return self.x[index], self.label[index]
@@ -95,10 +95,10 @@ def generate_random_data(num_samples: int, save_path: str):
         num_samples: 样本数量
         save_path: 保存路径
     """
-    x = np.random.randn(num_samples, Game_Input_C).astype(np.float32)
+    x = np.random.randn(num_samples, NN_INPUT_C).astype(np.float32)
     
     # 随机策略（softmax后的概率）
-    policy = np.random.dirichlet(np.ones(Game_Output_C_Policy), size=num_samples).astype(np.float32)
+    policy = np.random.dirichlet(np.ones(NN_OUTPUT_C_POLICY), size=num_samples).astype(np.float32)
     
     # 随机价值
     value_mean = (np.random.randn(num_samples) * 300 + 38000).astype(np.float32)

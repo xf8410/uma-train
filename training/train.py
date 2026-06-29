@@ -23,8 +23,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 from .dataset import UmaTrainDataset, SelfPlayDataset, generate_random_data
 from model.network import create_model, load_model, save_model, MODEL_DICT
 from config import (
-    Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value,
-    SEED, LEARNING_RATE, WEIGHT_DECAY, BATCH_SIZE,
+    NN_OUTPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE,
+    SEED, LEARNING_RATE, WEIGHT_DECAY, BATCH_SIZE, MAX_EPOCHS,
     VALUE_LOSS_WEIGHT_MEAN, VALUE_LOSS_WEIGHT_STDEV, VALUE_LOSS_WEIGHT_OPTIMISTIC,
     VALUE_MEAN_OFFSET, VALUE_MEAN_SCALE, VALUE_STDEV_SCALE,
     SAVE_STEP, INFO_STEP,
@@ -66,16 +66,16 @@ def calculate_loss(output: torch.Tensor, label: torch.Tensor):
     - 策略损失：交叉熵
     
     Args:
-        output: 模型输出 (batch, Game_Output_C)
-        label: 标签 (batch, Game_Output_C)
+        output: 模型输出 (batch, NN_OUTPUT_C)
+        label: 标签 (batch, NN_OUTPUT_C)
         
     Returns:
         (value_loss, policy_loss)
     """
-    output_policy = output[:, :Game_Output_C_Policy]
-    output_value = output[:, Game_Output_C_Policy:]
-    label_policy = label[:, :Game_Output_C_Policy]
-    label_value = label[:, Game_Output_C_Policy:]
+    output_policy = output[:, :NN_OUTPUT_C_POLICY]
+    output_value = output[:, NN_OUTPUT_C_POLICY:]
+    label_policy = label[:, :NN_OUTPUT_C_POLICY]
+    label_value = label[:, NN_OUTPUT_C_POLICY:]
     
     huber_loss = nn.HuberLoss(reduction='mean', delta=1.0)
     
@@ -110,6 +110,7 @@ def train(
     lr_scale: float = 1.0,
     wd_scale: float = 1.0,
     max_step: int = 500000,
+    max_epochs: int = MAX_EPOCHS,
     save_step: int = SAVE_STEP,
     info_step: int = INFO_STEP,
     gpu: int = 0,
@@ -131,6 +132,7 @@ def train(
         lr_scale: 学习率缩放
         wd_scale: 权重衰减缩放
         max_step: 最大训练步数
+        max_epochs: 最大epoch数
         save_step: 保存间隔
         info_step: 日志间隔
         gpu: GPU编号（-1为CPU）
@@ -227,12 +229,16 @@ def train(
         v_dataset = UmaTrainDataset(val_data_path)
         print(f"验证数据: {len(v_dataset)} 条")
 
-    # 训练循环
+    # 训练循环：显式epoch管理
     print("开始训练...")
     time0 = time.time()
     loss_record = [0, 0, 0, 1e-30, 0, 0]  # total, v, p, count, acc, diff
 
-    while True:
+    for epoch in range(max_epochs):
+        # epoch级累计
+        epoch_loss_sum = 0.0
+        epoch_step_count = 0
+
         for _, (x, label) in enumerate(t_dataloader):
             if x.shape[0] != batch_size:
                 continue
@@ -246,8 +252,8 @@ def train(
             v_loss, p_loss = calculate_loss(nn_output, label)
 
             # 策略精度计算
-            output_policy = nn_output[:, :Game_Output_C_Policy]
-            label_policy = label[:, :Game_Output_C_Policy]
+            output_policy = nn_output[:, :NN_OUTPUT_C_POLICY]
+            label_policy = label[:, :NN_OUTPUT_C_POLICY]
             _, p1_predicted = torch.max(output_policy, 1)
             p1_label_values, p1_labels = torch.max(label_policy, 1)
             p1_predicted_values = label_policy[torch.arange(label_policy.shape[0]), p1_predicted]
@@ -261,6 +267,10 @@ def train(
             loss_record[2] += p_loss.detach().item()
             loss_record[3] += 1
             loss_record[4] += p1_correct / batch_size
+
+            # epoch级累计
+            epoch_loss_sum += loss.item()
+            epoch_step_count += 1
 
             loss.backward()
             # 梯度裁剪
@@ -284,7 +294,7 @@ def train(
                 p_loss_train = loss_record[2] / loss_record[3]
                 p1_acc_train = loss_record[4] / loss_record[3]
 
-                print(f"step={total_step}, time={time_used:.1f}s, "
+                print(f"step={total_step}, epoch={epoch}, time={time_used:.1f}s, "
                       f"total_loss={total_loss_train:.4f}, "
                       f"v_loss={v_loss_train:.4f}(bk={v_backup1_loss:.4f}), "
                       f"p_loss={p_loss_train:.4f}(bk={p_backup1_loss:.4f}), "
@@ -378,13 +388,25 @@ def train(
 
                     model.train()
 
+            # total_step退出条件
             if total_step - start_step >= max_step:
-                print("训练完成!")
+                print("训练完成! (达到max_step)")
                 return
 
+        # epoch结束日志
+        if epoch_step_count > 0:
+            epoch_avg_loss = epoch_loss_sum / epoch_step_count
+            print(f"[Epoch {epoch}] 完成, steps={epoch_step_count}, "
+                  f"avg_loss={epoch_avg_loss:.4f}, "
+                  f"total_step={total_step}, "
+                  f"lr={optimizer.param_groups[0]['lr']:.6f}")
+
+        # epoch结束后也检查total_step退出
         if total_step - start_step >= max_step:
-            print("训练完成!")
+            print("训练完成! (达到max_step)")
             return
+
+    print(f"训练完成! (达到max_epochs={max_epochs})")
 
 
 if __name__ == "__main__":
@@ -398,6 +420,7 @@ if __name__ == "__main__":
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--new', action='store_true', default=False)
     parser.add_argument('--max_step', type=int, default=500000)
+    parser.add_argument('--max_epochs', type=int, default=MAX_EPOCHS)
     args = parser.parse_args()
 
     model_param = tuple(args.model_param) if args.model_param else None
@@ -412,4 +435,5 @@ if __name__ == "__main__":
         gpu=args.gpu,
         new_train=args.new,
         max_step=args.max_step,
+        max_epochs=args.max_epochs,
     )

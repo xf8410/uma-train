@@ -17,9 +17,9 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    Game_Input_C, Game_Input_C_Global, Game_Input_C_Card, Game_Input_C_CardPerson,
-    Game_Input_C_Person,
-    Game_Card_Num, Game_Head_Num, Game_Output_C, Game_Output_C_Policy, Game_Output_C_Value,
+    NN_INPUT_C, NN_INPUT_C_GLOBAL, NN_INPUT_C_CARD, NN_INPUT_C_CARDPERSON,
+    NN_INPUT_C_PERSON,
+    NN_CARD_NUM, NN_HEAD_NUM, NN_OUTPUT_C, NN_OUTPUT_C_POLICY, NN_OUTPUT_C_VALUE,
     DEFAULT_ENCODER_BLOCKS, DEFAULT_ENCODER_FEATURES, DEFAULT_MLP_BLOCKS,
     DEFAULT_MLP_FEATURES, DEFAULT_GLOBAL_FEATURES, MODEL_SIZE_LIMIT,
 )
@@ -96,13 +96,13 @@ class ModelEncoderMlpSimple(nn.Module):
     2. Encoder：多组简化的自注意力层，全局信息作为条件
     3. MLP：残差MLP层，输出策略和价值
     
-    输入格式（Game_Head_Num==0时，人头合并到卡槽）：
-    - x[:, :Game_Input_C_Global] - 全局信息（156维）
-    - x[:, Game_Input_C_Global:] - 支援卡信息（6卡x38维/卡）
+    输入格式（NN_HEAD_NUM==0时，人头合并到卡槽）：
+    - x[:, :NN_INPUT_C_GLOBAL] - 全局信息（156维）
+    - x[:, NN_INPUT_C_GLOBAL:] - 支援卡信息（6卡x38维/卡）
     
     输出格式：
-    - output[:, :Game_Output_C_Policy] - 策略logits (53维)
-    - output[:, Game_Output_C_Policy:] - 价值 (3维: 归一化平均分, 归一化标准差, 归一化乐观分)
+    - output[:, :NN_OUTPUT_C_POLICY] - 策略logits (53维)
+    - output[:, NN_OUTPUT_C_POLICY:] - 价值 (3维: 归一化平均分, 归一化标准差, 归一化乐观分)
     """
     
     def __init__(
@@ -120,13 +120,13 @@ class ModelEncoderMlpSimple(nn.Module):
         
         # 输入编码层
         # 修复P0-7：当Head_Num==0时，每个卡槽包含卡片+人头信息，使用CardPerson维度
-        self._card_input_dim = Game_Input_C_CardPerson if Game_Head_Num == 0 else Game_Input_C_Card
-        self.inputhead_global1 = nn.Linear(Game_Input_C_Global, global_features, bias=False)
+        self._card_input_dim = NN_INPUT_C_CARDPERSON if NN_HEAD_NUM == 0 else NN_INPUT_C_CARD
+        self.inputhead_global1 = nn.Linear(NN_INPUT_C_GLOBAL, global_features, bias=False)
         self.inputhead_global2 = nn.Linear(global_features, encoder_features, bias=False)
         self.inputhead_card = nn.Linear(self._card_input_dim, encoder_features, bias=False)
         
-        if Game_Head_Num != 0:
-            self.inputhead_person = nn.Linear(Game_Input_C_Person, encoder_features, bias=False)
+        if NN_HEAD_NUM != 0:
+            self.inputhead_person = nn.Linear(NN_INPUT_C_PERSON, encoder_features, bias=False)
         
         # Encoder层
         self.encoder_trunk = nn.ModuleList([
@@ -145,42 +145,42 @@ class ModelEncoderMlpSimple(nn.Module):
         ])
         
         # 输出层
-        self.outputhead = nn.Linear(mlp_features, Game_Output_C)
+        self.outputhead = nn.Linear(mlp_features, NN_OUTPUT_C)
     
     def forward(self, x):
         """前向传播
         
         Args:
-            x: (batch, Game_Input_C) 输入向量
+            x: (batch, NN_INPUT_C) 输入向量
             
         Returns:
-            (batch, Game_Output_C) 输出向量
+            (batch, NN_OUTPUT_C) 输出向量
         """
         # 分割输入
-        x1 = x[:, :Game_Input_C_Global]  # 全局信息
+        x1 = x[:, :NN_INPUT_C_GLOBAL]  # 全局信息
         
-        if Game_Head_Num != 0:
-            x2 = x[:, Game_Input_C_Global:Game_Input_C_Global + Game_Card_Num * Game_Input_C_Card].reshape(-1, Game_Input_C_Card)
-            x3 = x[:, Game_Input_C_Global + Game_Card_Num * Game_Input_C_Card:].reshape(-1, Game_Input_C_Person)
+        if NN_HEAD_NUM != 0:
+            x2 = x[:, NN_INPUT_C_GLOBAL:NN_INPUT_C_GLOBAL + NN_CARD_NUM * NN_INPUT_C_CARD].reshape(-1, NN_INPUT_C_CARD)
+            x3 = x[:, NN_INPUT_C_GLOBAL + NN_CARD_NUM * NN_INPUT_C_CARD:].reshape(-1, NN_INPUT_C_PERSON)
         else:
             # 修复P0-7：使用卡槽维度（含人头信息）而非纯卡片维度
-            x2 = x[:, Game_Input_C_Global:].reshape(-1, self._card_input_dim)
+            x2 = x[:, NN_INPUT_C_GLOBAL:].reshape(-1, self._card_input_dim)
         
         # 全局特征
         gf = torch.relu(self.inputhead_global1(x1))
         
         # 编码输入
-        if Game_Head_Num != 0:
+        if NN_HEAD_NUM != 0:
             h = (
                 self.inputhead_global2(gf).view(-1, 1, self.encoder_features) +
-                F.pad(self.inputhead_card(x2).view(-1, Game_Card_Num, self.encoder_features),
-                      (0, 0, 0, Game_Head_Num - Game_Card_Num, 0, 0)) +
-                self.inputhead_person(x3).view(-1, Game_Head_Num, self.encoder_features)
+                F.pad(self.inputhead_card(x2).view(-1, NN_CARD_NUM, self.encoder_features),
+                      (0, 0, 0, NN_HEAD_NUM - NN_CARD_NUM, 0, 0)) +
+                self.inputhead_person(x3).view(-1, NN_HEAD_NUM, self.encoder_features)
             )
         else:
             h = (
                 self.inputhead_global2(gf).view(-1, 1, self.encoder_features) +
-                self.inputhead_card(x2).view(-1, Game_Card_Num, self.encoder_features)
+                self.inputhead_card(x2).view(-1, NN_CARD_NUM, self.encoder_features)
             )
         
         h = torch.relu(h)
@@ -221,8 +221,8 @@ class ModelTwoLayer(nn.Module):
         super().__init__()
         self.model_type = "tl"
         self.model_param = (mid_c,)
-        self.inputhead = nn.Linear(Game_Input_C, mid_c)
-        self.outputhead = nn.Linear(mid_c, Game_Output_C)
+        self.inputhead = nn.Linear(NN_INPUT_C, mid_c)
+        self.outputhead = nn.Linear(mid_c, NN_OUTPUT_C)
     
     def forward(self, x):
         y = self.inputhead(x)
@@ -237,7 +237,7 @@ class ModelLinear(nn.Module):
         super().__init__()
         self.model_type = "lin"
         self.model_param = (_,)
-        self.linear1 = nn.Linear(Game_Input_C, Game_Output_C)
+        self.linear1 = nn.Linear(NN_INPUT_C, NN_OUTPUT_C)
     
     def forward(self, x):
         return self.linear1(x)
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     
     # 测试forward
     batch_size = 4
-    x = torch.randn(batch_size, Game_Input_C)
+    x = torch.randn(batch_size, NN_INPUT_C)
     
     model.eval()
     with torch.no_grad():
@@ -340,6 +340,6 @@ if __name__ == "__main__":
     
     print(f"输入形状: {x.shape}")
     print(f"输出形状: {output.shape}")
-    print(f"策略输出范围: [{output[0, :Game_Output_C_Policy].min():.3f}, {output[0, :Game_Output_C_Policy].max():.3f}]")
-    print(f"价值输出: {output[0, Game_Output_C_Policy:].tolist()}")
+    print(f"策略输出范围: [{output[0, :NN_OUTPUT_C_POLICY].min():.3f}, {output[0, :NN_OUTPUT_C_POLICY].max():.3f}]")
+    print(f"价值输出: {output[0, NN_OUTPUT_C_POLICY:].tolist()}")
     print("测试通过!")

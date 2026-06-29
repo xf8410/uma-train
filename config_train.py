@@ -19,6 +19,9 @@ WEIGHT_DECAY = 1e-5
 # 批大小
 BATCH_SIZE = 1024
 
+# 最大epoch数（配合max_step共同控制训练终止）
+MAX_EPOCHS = 1000
+
 # 价值损失权重
 VALUE_LOSS_WEIGHT_MEAN = 0.2
 VALUE_LOSS_WEIGHT_STDEV = 0.4
