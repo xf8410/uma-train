@@ -456,7 +456,7 @@ def test_handwritten_evaluator():
         Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
     ramen = RamenScenario()
     ramen.add_kakushimi(20)
-    game_ramen._ramen_scenario = ramen
+    game_ramen.scenario = ramen
     val_with_ramen = evaluator._evaluate_action(game_ramen,
         Action(type=GameStage.BEFORE_TRAIN, train=TrainActionType.SPEED), rng)
     assert val_with_ramen > val_no_ramen

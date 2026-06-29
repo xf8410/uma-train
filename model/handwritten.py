@@ -357,7 +357,7 @@ class HandwrittenEvaluator:
         当game绑定了RamenScenario时调用。
         """
         score = 0.0
-        ramen = getattr(game, '_ramen_scenario', None)
+        ramen = game.scenario if isinstance(game.scenario, RamenScenario) else None
         if ramen is None:
             return 0.0
 
@@ -390,7 +390,7 @@ class HandwrittenEvaluator:
         お出かけ给隠し味+2，在隠し味不足时价值更高
         """
         score = 0.0
-        ramen = getattr(game, '_ramen_scenario', None)
+        ramen = game.scenario if isinstance(game.scenario, RamenScenario) else None
         if ramen is not None:
             # 隠し味+2的直接价值
             progress = game.turn / TOTAL_TURN

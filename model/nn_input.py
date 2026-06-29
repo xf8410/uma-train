@@ -170,7 +170,7 @@ def encode_game_state(game: Game) -> List[float]:
         f"BC编码维度不匹配: 实际{idx}, 期望{_GLOBAL_BASE_DIM + NN_INPUT_C_BC}"
 
     # ===== Ramen剧本状态 (16维) =====
-    ramen = getattr(game, '_ramen_scenario', None)
+    ramen = game.scenario if isinstance(game.scenario, RamenScenario) else None
     if ramen is not None:
         # 隠し味の秘訣数量（归一化到~50）
         buf[idx] = ramen.kakushimi_count / 50.0; idx += 1

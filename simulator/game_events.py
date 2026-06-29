@@ -189,6 +189,10 @@ def check_event_after_train(game, rng):
     check_fixed_events(game, rng)
     check_random_events(game, rng)
 
+    # 剧本回合结束
+    if game.scenario is not None:
+        game.scenario.on_turn_end(game, rng)
+
     # 回合+1
     game.turn += 1
     if game.turn < TOTAL_TURN:

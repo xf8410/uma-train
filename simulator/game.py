@@ -4,7 +4,7 @@
 参考 UmaAi 的 Game.h/cpp，Python版游戏模拟器核心。
 重构后：Game dataclass保留字段+基本状态操作，
 训练计算委托game_calc、事件处理委托game_events、
-Dreams剧本委托game_dreams、评分委托game_score。
+剧本通过scenario接口调用、评分委托game_score。
 """
 
 import math
@@ -19,6 +19,7 @@ from .person import (
 )
 from simulator.scenarios.base import ScenarioBase
 from simulator.scenarios.dreams import DreamsScenario
+from simulator.scenarios.ramen import RamenScenario
 from .bad_condition import BadConditionType, BadCondition, BadConditionManager
 from .formula import FormulaLayer, MOTIVATION_MULTIPLIER, MOTIVATION_REST_VITAL
 from config import (
@@ -73,6 +74,8 @@ class Game:
     hint_pt_rate: float = HINT_LEVEL_PT_RATE_DEFAULT
     event_strength: int = EVENT_STRENGTH_DEFAULT
     scoring_mode: int = SCORING_NORMAL
+    scenario_id: int = 13                 # 剧本ID（13=Dreams, 14=Ramen）
+    scenario: Optional[ScenarioBase] = field(default=None)  # 剧本实例
 
     # ===== 基本状态 =====
     uma_id: int = 0                    # 马娘编号
@@ -225,6 +228,9 @@ class Game:
             # 得意率
             "current_deyilv_bonus": self.current_deyilv_bonus,
             "current_lianghua_effect_enable": self.current_lianghua_effect_enable,
+            # 剧本
+            "scenario_id": self.scenario_id,
+            "scenario": deepcopy(self.scenario),
             # Dreams剧本相关
             "mecha_linkeffect_gear_prob_bonus": self.mecha_linkeffect_gear_prob_bonus,
             "mecha_linkeffect_lvbonus": self.mecha_linkeffect_lvbonus,
@@ -307,6 +313,9 @@ class Game:
         # 得意率
         self.current_deyilv_bonus = snap["current_deyilv_bonus"]
         self.current_lianghua_effect_enable = snap["current_lianghua_effect_enable"]
+        # 剧本
+        self.scenario_id = snap["scenario_id"]
+        self.scenario = deepcopy(snap["scenario"])
         # Dreams剧本相关
         self.mecha_linkeffect_gear_prob_bonus = snap["mecha_linkeffect_gear_prob_bonus"]
         self.mecha_linkeffect_lvbonus = snap["mecha_linkeffect_lvbonus"]
@@ -336,7 +345,8 @@ class Game:
                  card_ids: Optional[List[int]] = None,
                  zhong_ma_blue: Optional[List[int]] = None,
                  zhong_ma_extra: Optional[List[int]] = None,
-                 card_db: Optional[dict] = None):
+                 card_db: Optional[dict] = None,
+                 scenario_id: Optional[int] = None):
         """初始化新游戏
         
         Args:
@@ -354,6 +364,11 @@ class Game:
             zhong_ma_blue = [0] * 5
         if zhong_ma_extra is None:
             zhong_ma_extra = [0] * 6
+
+        # scenario_id和scenario初始化
+        if scenario_id is not None:
+            self.scenario_id = scenario_id
+        self._init_scenario()
 
         # 基本状态初始化
         self.turn = 0
@@ -435,8 +450,11 @@ class Game:
                 self.friend_vital_bonus = 1.0 + 0.01 * p.card_param.event_recovery_amount_up
                 self.friend_status_bonus = 1.0 + 0.01 * p.card_param.event_effect_up
 
-        # Dreams剧本初始化
-        self._init_mecha(rng)
+        # 剧本初始化
+        if isinstance(self.scenario, DreamsScenario):
+            self.scenario.init_mecha(self, rng)
+        elif isinstance(self.scenario, RamenScenario):
+            pass  # Ramen无额外初始化
 
         # 随机分配卡组并计算训练值
         self.random_distribute_cards(rng)
@@ -716,6 +734,10 @@ class Game:
         if self.is_end():
             return
 
+        # 剧本回合开始
+        if self.scenario is not None:
+            self.scenario.on_turn_start(self, rng)
+
         if action.type == GameStage.BEFORE_MECHA_UPGRADE:
             mecha_foot = self.mecha_en // 3 - action.mecha_head - action.mecha_chest
             self._mecha_distribute_en(action.mecha_head, action.mecha_chest, mecha_foot, rng)
@@ -924,50 +946,66 @@ class Game:
         """友人外出解锁"""
         return game_events.handle_friend_unlock(self, rng)
 
-    # ===== Dreams剧本相关（委托game_dreams） =====
+    # ===== 剧本相关（通过scenario接口调用） =====
+
+    def _init_scenario(self):
+        """根据scenario_id创建剧本实例"""
+        if self.scenario_id == 13:
+            self.scenario = DreamsScenario()
+        elif self.scenario_id == 14:
+            self.scenario = RamenScenario()
+        else:
+            self.scenario = DreamsScenario()  # 默认Dreams
 
     def _mecha_maybe_run_uge(self) -> bool:
         """检查是否触发UGE比赛"""
-        return game_dreams.mecha_maybe_run_uge(self)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.maybe_run_uge(self)
+        return False
 
     def _mecha_activate_overdrive(self, rng: random.Random) -> bool:
         """开启overdrive"""
-        return game_dreams.mecha_activate_overdrive(self, rng)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.activate_overdrive(self, rng)
+        return False
 
     def _mecha_maybe_reverse_overdrive(self) -> bool:
         """恢复overdrive状态"""
-        return game_dreams.mecha_maybe_reverse_overdrive(self)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.maybe_reverse_overdrive(self)
+        return False
 
     def _mecha_distribute_en(self, head3: int, chest3: int, foot3: int, rng: random.Random):
         """分配EN到头胸脚升级"""
-        return game_dreams.mecha_distribute_en(self, head3, chest3, foot3, rng)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.distribute_en(self, head3, chest3, foot3, rng)
 
     def _try_invite_people(self, rng: random.Random) -> bool:
         """尝试拉一个人到训练"""
-        return game_dreams.try_invite_people(self, rng)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.try_invite_people(self, rng)
+        return False
 
     def is_card_shining(self, person_idx: int, train_idx: int) -> bool:
         """判断指定卡是否闪彩"""
-        return game_dreams.is_card_shining(self, person_idx, train_idx)
-
-    def _init_mecha(self, rng: random.Random):
-        """初始化Dreams剧本相关状态"""
-        return game_dreams.init_mecha(self, rng)
+        if isinstance(self.scenario, DreamsScenario):
+            return self.scenario.is_card_shining(self, person_idx, train_idx)
+        return False
 
     def _is_link_chara_initial_en(self, chara_id: int) -> bool:
-        return game_dreams.is_link_chara_initial_en(self, chara_id)
+        return DreamsScenario.is_link_chara_initial_en(chara_id)
 
     def _is_link_chara_more_gear(self, chara_id: int) -> bool:
-        return game_dreams.is_link_chara_more_gear(self, chara_id)
+        return DreamsScenario.is_link_chara_more_gear(chara_id)
 
     def _is_link_chara_initial_overdrive(self, chara_id: int) -> bool:
-        return game_dreams.is_link_chara_initial_overdrive(self, chara_id)
+        return DreamsScenario.is_link_chara_initial_overdrive(chara_id)
 
     def _is_link_chara_lv_bonus(self, chara_id: int) -> bool:
-        return game_dreams.is_link_chara_lv_bonus(self, chara_id)
+        return DreamsScenario.is_link_chara_lv_bonus(chara_id)
 
     def _is_link_chara_initial_lv(self, chara_id: int) -> bool:
-        return game_dreams.is_link_chara_initial_lv(self, chara_id)
+        return DreamsScenario.is_link_chara_initial_lv(chara_id)
 
     # ===== 评分（委托game_score） =====
 

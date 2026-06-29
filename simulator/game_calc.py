@@ -217,6 +217,10 @@ def calc_training_value_single(game, tra: int):
     # 研究等级提升量
     calc_lv_gain_single(game, tra, head_num, shining_num > 0)
 
+    # 剧本修改训练值（如Ramen的隠し味/コツ加成）
+    if game.scenario is not None:
+        game.train_value[tra] = game.scenario.modify_training_value(game, tra, list(game.train_value[tra]))
+
 
 def calc_lv_gain_single(game, tra: int, head_num: int, is_shining: bool):
     """计算每个训练加多少研究等级"""

@@ -52,6 +52,9 @@ def _calc_final_score_rank(game) -> int:
         else:
             total += int(100 + (stat - 100) * SCORE_ABOVE_100_MULT)
     total += int(game.get_skill_score())
+    # 剧本额外评分（如Ramen的隠し味评分）
+    if game.scenario is not None:
+        total += game.scenario.calculate_score(game)
     return total
 
 
@@ -71,6 +74,9 @@ def _calc_final_score_sum(game) -> int:
             real_stat = PROPERTY_HALVE_THRESHOLD + (real_stat - PROPERTY_HALVE_THRESHOLD) // 2
         total += SCORING_WEIGHTS[i] * real_stat
     total += game.get_skill_score()
+    # 剧本额外评分
+    if game.scenario is not None:
+        total += game.scenario.calculate_score(game)
     return int(max(0, total))
 
 
@@ -91,6 +97,9 @@ def _calc_final_score_race(game) -> int:
             real_stat = PROPERTY_HALVE_THRESHOLD + (real_stat - PROPERTY_HALVE_THRESHOLD) // 2
         total += SCORING_WEIGHTS[i] * real_stat
     total += game.get_skill_score()
+    # 剧本额外评分
+    if game.scenario is not None:
+        total += game.scenario.calculate_score(game)
     return int(max(0, total))
 
 
@@ -111,4 +120,7 @@ def _calc_final_score_mile(game) -> int:
             real_stat = PROPERTY_HALVE_THRESHOLD + (real_stat - PROPERTY_HALVE_THRESHOLD) // 2
         total += SCORING_WEIGHTS[i] * real_stat
     total += game.get_skill_score()
+    # 剧本额外评分
+    if game.scenario is not None:
+        total += game.scenario.calculate_score(game)
     return int(max(0, total))
