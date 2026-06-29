@@ -218,8 +218,12 @@ SCORING_MILE = 2  # 英里模式
 
 # 输入维度（参考UmaAi的NNInput.h和training/config.py）
 # 全局信息 + 6张支援卡信息
-NN_INPUT_C_GLOBAL = 587  # 全局信息通道数
-NN_INPUT_C_CARD = 89  # 每张支援卡参数通道数
+# 原始: 587全局 + 89卡 + 12人头
+# 新增: バッドコンディション(8维) + Ramen剧本(15维) = 23维
+NN_INPUT_C_GLOBAL = 587  # 全局信息通道数（含预留空间，足够放BC+Ramen）
+NN_INPUT_C_BC = 8       # バッドコンディション维度（6种状态+count+治愈可能）
+NN_INPUT_C_RAMEN = 15   # Ramen剧本维度（隠し味+コツ+CP+試食会+Feeling）
+NN_INPUT_C_CARD = 89    # 每张支援卡参数通道数
 NN_INPUT_C_PERSON = 12  # 每个人头信息通道数（Dreams剧本暂不使用独立person）
 NN_INPUT_C_CARDPERSON = NN_INPUT_C_CARD + NN_INPUT_C_PERSON  # 每个支援卡人头
 

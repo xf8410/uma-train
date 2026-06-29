@@ -12,6 +12,8 @@ from simulator.game import Game
 from simulator.action import Action, TrainActionType, GameStage
 from simulator.person import PersonType
 from config import TOTAL_TURN
+from simulator.bad_condition import BadConditionType
+from simulator.scenarios.ramen import RamenScenario
 
 
 # ============================================================================
@@ -49,6 +51,25 @@ BIG_FAIL_VALUE = -1800.0
 
 # 外出加成
 OUTGOING_BONUS_IF_NOT_FULL_MOTIVATION = 200.0
+
+# ===== Ramen剧本专属常量 =====
+# 隠し味の秘訣价值（每10隠し味约等于1次训练）
+KAKUSHIMI_VALUE_PER_10 = 250.0
+# コツ等级价值
+KOTSU_LEVEL_VALUE = 80.0
+# CheckPoint进度价值
+CHECKPOINT_VALUE = 150.0
+# 試食会触发回合价值
+TASTING_BONUS = 300.0
+# バッドコンディション惩罚
+BC_PENALTY = {
+    BadConditionType.BAD: -800.0,       # 練習ベタ：失败率上升
+    BadConditionType.LAZY: -600.0,      # なまけ癖：跳过训练
+    BadConditionType.FAT: -500.0,       # 太り気味：Speed无效
+    BadConditionType.HEADACHE: -400.0,  # 片頭痛：やる気不上升
+    BadConditionType.SKIN: -300.0,      # 肌荒れ：やる気下降
+    BadConditionType.LATE_BED: -350.0,  # 夜ふかし：体力消耗
+}
 
 # 休息加成
 REST_BASE_VALUE = -100.0
@@ -172,19 +193,28 @@ class HandwrittenEvaluator:
         return game.final_score()
     
     def _evaluate_action(self, game: Game, action: Action, rng: random.Random) -> float:
-        """评估单个动作的价值"""
+        """评估单个动作的价值（含BC惩罚+Ramen加成）"""
+        # バッドコンディション惩罚（对所有动作都有影响）
+        bc_score = self._evaluate_bc(game)
+
+        # Ramen剧本状态加成
+        ramen_score = self._evaluate_ramen(game)
+
         if action.type == GameStage.BEFORE_MECHA_UPGRADE:
-            return self._evaluate_upgrade(game, action)
+            return self._evaluate_upgrade(game, action) + bc_score + ramen_score
         
         train = action.train
         if train == TrainActionType.REST:
-            return self._evaluate_rest(game)
+            return self._evaluate_rest(game) + bc_score + ramen_score
         elif train == TrainActionType.OUTGOING:
-            return self._evaluate_outgoing(game)
+            outing = self._evaluate_outgoing(game)
+            # Ramenお出かけ特殊加成
+            outing += self._evaluate_outing_ramen(game)
+            return outing + bc_score + ramen_score
         elif train == TrainActionType.RACE:
-            return self._evaluate_race(game)
+            return self._evaluate_race(game) + bc_score + ramen_score
         elif 0 <= train <= 4:
-            return self._evaluate_training(game, train)
+            return self._evaluate_training(game, train) + bc_score + ramen_score
         
         return -1000.0
     
@@ -267,12 +297,19 @@ class HandwrittenEvaluator:
         return score
     
     def _evaluate_rest(self, game: Game) -> float:
-        """评估休息"""
+        """评估お休み（使用公式层计算回复量）"""
         vital_factor = calc_vital_factor(game.turn)
         vital_before = vital_evaluation(game.vital, game.max_vital)
-        vital_after = min(game.vital + 50, game.max_vital)
+        # 公式层：基础回复由やる気决定（非固定50）
+        from simulator.formula import MOTIVATION_REST_VITAL
+        rest_vital = MOTIVATION_REST_VITAL.get(game.motivation, 60)
+        vital_after = min(game.vital + rest_vital, game.max_vital)
         vital_after_value = vital_evaluation(vital_after, game.max_vital)
-        return vital_factor * (vital_after_value - vital_before)
+        rest_score = vital_factor * (vital_after_value - vital_before)
+        # お休み可治愈バッドコンディション的额外价值
+        if game.bc_manager.has(BadConditionType.LATE_BED) or game.bc_manager.has(BadConditionType.SKIN):
+            rest_score += 200.0  # 有可治愈BC时お休み额外加分
+        return rest_score
     
     def _evaluate_outgoing(self, game: Game) -> float:
         """评估外出"""
@@ -304,6 +341,69 @@ class HandwrittenEvaluator:
         elif game.is_race_available():
             return NON_TARGET_RACE_BONUS
         return -1000.0
+
+    # ===== Ramen剧本评估 =====
+
+    def _evaluate_ramen(self, game: Game) -> float:
+        """评估Ramen剧本状态（隠し味/コツ/CheckPoint/試食会）
+
+        当game绑定了RamenScenario时调用。
+        """
+        score = 0.0
+        ramen = getattr(game, '_ramen_scenario', None)
+        if ramen is None:
+            return 0.0
+
+        # 隠し味の秘訣价值（非线性：前期价值低，后期价值高）
+        progress = game.turn / TOTAL_TURN
+        kakushimi_weight = 0.5 + 1.5 * progress  # 后期权重更高
+        score += ramen.kakushimi_count * KAKUSHIMI_VALUE_PER_10 / 10.0 * kakushimi_weight
+
+        # コツ等级价值
+        kotsu_total = sum(ramen.kotsu_level)
+        score += kotsu_total * KOTSU_LEVEL_VALUE
+
+        # CheckPoint进度
+        if ramen.expected_checkpoint_pt > 0:
+            cp_ratio = ramen.checkpoint_pt / ramen.expected_checkpoint_pt
+            score += cp_ratio * CHECKPOINT_VALUE
+
+        # 試食会即将触发
+        tasting_turns = [12, 24, 36, 48, 60]
+        for t in tasting_turns:
+            if 0 < t - game.turn <= 3:  # 3回合内即将試食会
+                score += TASTING_BONUS * (1.0 - (t - game.turn) / 3.0)
+                break
+
+        return score
+
+    def _evaluate_outing_ramen(self, game: Game) -> float:
+        """Ramen剧本お出かけ(304)特殊评估
+
+        お出かけ给隠し味+2，在隠し味不足时价值更高
+        """
+        score = 0.0
+        ramen = getattr(game, '_ramen_scenario', None)
+        if ramen is not None:
+            # 隠し味+2的直接价值
+            progress = game.turn / TOTAL_TURN
+            kakushimi_weight = 0.5 + 1.5 * progress
+            score += 2 * KAKUSHIMI_VALUE_PER_10 / 10.0 * kakushimi_weight
+        return score
+
+    # ===== バッドコンディション评估 =====
+
+    def _evaluate_bc(self, game: Game) -> float:
+        """评估バッドコンディション对当前状态的影响"""
+        score = 0.0
+        bc = game.bc_manager
+        for condition in bc.conditions:
+            penalty = BC_PENALTY.get(condition.bc_type, 0.0)
+            # 后期バッドコンディション更致命（更难恢复）
+            progress = game.turn / TOTAL_TURN
+            severity = 1.0 + 0.5 * progress
+            score += penalty * severity
+        return score
     
     def _evaluate_upgrade(self, game: Game, action: Action) -> float:
         """评估升级动作"""

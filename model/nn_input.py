@@ -9,9 +9,12 @@ from typing import List
 from simulator.game import Game
 from simulator.action import TrainActionType
 from simulator.person import PersonType, FriendStage
+from simulator.bad_condition import BadConditionType
+from simulator.scenarios.ramen import RamenScenario
 from config import (
     NN_INPUT_C, NN_INPUT_C_GLOBAL, NN_INPUT_C_CARD, NN_INPUT_C_PERSON,
     NN_INPUT_C_CARDPERSON, NN_CARD_NUM, TOTAL_TURN,
+    NN_INPUT_C_BC, NN_INPUT_C_RAMEN,
 )
 
 
@@ -142,8 +145,49 @@ def encode_game_state(game: Game) -> List[float]:
     for i in range(6):
         buf[idx] = game.mecha_training_status_multiplier[i] - 1.0; idx += 1
     
+    # ===== バッドコンディション状态 (8维) =====
+    # 6种状态one-hot
+    for bc_type in [BadConditionType.BAD, BadConditionType.LAZY,
+                    BadConditionType.FAT, BadConditionType.HEADACHE,
+                    BadConditionType.SKIN, BadConditionType.LATE_BED]:
+        buf[idx] = 1.0 if game.bc_manager.has(bc_type) else 0.0; idx += 1
+    # BC数量（归一化）
+    buf[idx] = game.bc_manager.count / 6.0; idx += 1
+    # 是否可治愈（保健室/お休み）
+    has_healable = (game.bc_manager.count > 0)
+    buf[idx] = 1.0 if has_healable else 0.0; idx += 1
+
+    # ===== Ramen剧本状态 (15维) =====
+    ramen = getattr(game, '_ramen_scenario', None)
+    if ramen is not None:
+        # 隠し味の秘訣数量（归一化到~50）
+        buf[idx] = ramen.kakushimi_count / 50.0; idx += 1
+        # 試食会次数
+        buf[idx] = ramen.tasting_count / 5.0; idx += 1
+        # コツ等级（5维）
+        for i in range(5):
+            buf[idx] = ramen.kotsu_level[i] / 3.0; idx += 1
+        # CheckPoint进度
+        if ramen.expected_checkpoint_pt > 0:
+            buf[idx] = ramen.checkpoint_pt / ramen.expected_checkpoint_pt; idx += 1
+        else:
+            buf[idx] = 0.0; idx += 1
+        # 地域贡献（5个区域，归一化）
+        for region_id in range(5):
+            buf[idx] = ramen.region_points.get(region_id, 0) / 100.0; idx += 1
+        # SpecialFeelingNum
+        buf[idx] = ramen.special_feeling_num / 10.0; idx += 1
+        # Feeling值（2维：取前2个feeling_type的值）
+        feeling_vals = list(ramen.feeling_values.values())
+        buf[idx] = feeling_vals[0] / 100.0 if len(feeling_vals) > 0 else 0.0; idx += 1
+        buf[idx] = feeling_vals[1] / 100.0 if len(feeling_vals) > 1 else 0.0; idx += 1
+    else:
+        # 非Ramen剧本：15维全0
+        for _ in range(NN_INPUT_C_RAMEN):
+            buf[idx] = 0.0; idx += 1
+
     # 剩余全局维度用0填充（到NN_INPUT_C_GLOBAL维）
-    # idx目前约132，需要填充到587
+    # idx目前约132+8+15=155，需要填充到587
     
     # ===== 支援卡信息 =====
     for card_idx in range(NN_CARD_NUM):
