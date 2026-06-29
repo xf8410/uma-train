@@ -163,6 +163,11 @@ class Game:
         if self.formula is None:
             self.formula = FormulaLayer(self.bc_manager)
 
+    def _ensure_initialized(self):
+        """P2-4修复：确保formula/bc_manager已初始化，防止部分初始化时访问None"""
+        if self.formula is None or self.bc_manager is None:
+            self.__post_init__()
+
     def save_snapshot(self) -> dict:
         """保存当前状态快照，比deepcopy快10-50倍
 
@@ -488,6 +493,7 @@ class Game:
 
     def add_motivation(self, value: int):
         """增加或减少心情，考虑正向思考和片頭痛限制"""
+        self._ensure_initialized()
         if value < 0:
             if self.is_positive_thinking:
                 self.is_positive_thinking = False
@@ -730,6 +736,7 @@ class Game:
 
     def _apply_training(self, rng: random.Random, train: int) -> bool:
         """处理训练/出行/比赛"""
+        self._ensure_initialized()
         if train == TrainActionType.REST:
             # お休み：公式层计算回复量
             great_prob = self.formula.great_success_prob(self.vital, self.max_vital)

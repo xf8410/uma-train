@@ -22,6 +22,11 @@ from config import (
 )
 
 
+# P2-7修复：训练值上下限的上限截断值（来源：游戏引擎训练值下限/上限，反编译确认单次训练单项属性增益不超过此值）
+TRAIN_VALUE_LOWER_CAP = 100
+TRAIN_VALUE_UPPER_CAP = 100
+
+
 def calc_real_status_gain(game, value: int, gain: int) -> int:
     """考虑1200以上为2的倍数的实际属性增加值
     
@@ -196,12 +201,12 @@ def calc_training_value_single(game, tra: int):
     # 计算最终值
     for i in range(6):
         lower = game.train_value_lower[tra][i]
-        lower = min(lower, 100)
+        lower = min(lower, TRAIN_VALUE_LOWER_CAP)  # 训练值下限截断（游戏引擎上限）
         game.train_value_lower[tra][i] = lower
         
         total = int(lower * scenario_train_multiplier * game.mecha_training_status_multiplier[i])
         upper = total - lower
-        upper = min(upper, 100)
+        upper = min(upper, TRAIN_VALUE_UPPER_CAP)  # 训练值上限截断（游戏引擎上限）
         
         if i < 5:
             lower = game.calculate_real_status_gain(game.five_status[i], lower)

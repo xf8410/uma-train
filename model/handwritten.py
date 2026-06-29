@@ -222,6 +222,13 @@ class HandwrittenEvaluator:
         """评估训练动作"""
         score = 0.0
         
+        # P2-3修复：遍历persons找card_param.card_type == train的卡，而非用train直接索引
+        _has_train_card = any(
+            p.card_param.card_type == train
+            for p in game.persons
+            if p.person_type == PersonType.CARD
+        )
+
         # 属性收益
         for i in range(5):
             limit = game.five_status_limit[i]
@@ -235,7 +242,7 @@ class HandwrittenEvaluator:
             s0 = status_soft_function(-remain, reserve)
             s1 = status_soft_function(gain - remain, reserve)
             
-            weight = self.weights[i] if game.persons[train].card_param.card_type == train else ABSENT_WEIGHT
+            weight = self.weights[i] if _has_train_card else ABSENT_WEIGHT
             score += weight * (s1 - s0)
         
         # pt收益
