@@ -95,6 +95,42 @@ HINT_LEVEL_PT_RATE_DEFAULT = 4
 EVENT_PROB = 0.35
 EVENT_STRENGTH_DEFAULT = 20
 
+# ============================================================================
+# バッドコンディション常量
+# ============================================================================
+
+# 获取概率（每回合，从实测统计）
+BC_ACQUIRE_PROB_BAD = 0.03          # 練習ベタ
+BC_ACQUIRE_PROB_LAZY = 0.02        # なまけ癖
+BC_ACQUIRE_PROB_FAT = 0.015        # 太り気味
+BC_ACQUIRE_PROB_HEADACHE = 0.02    # 片頭痛
+BC_ACQUIRE_PROB_SKIN = 0.01        # 肌荒れ
+BC_ACQUIRE_PROB_LATE_BED = 0.03    # 夜ふかし
+
+# 治愈概率
+BC_HEAL_REST_LATE_BED = 0.5        # お休み治愈夜ふかし概率
+BC_HEAL_REST_SKIN = 0.4            # お休み治愈肌荒れ概率
+
+# なまけ癖触发概率和冷却
+BC_LAZY_TRIGGER_PROB = 0.4         # なまけ癖触发训练跳过概率
+BC_LAZY_COOLDOWN = 3               # 触发后冷却回合数
+BC_LAZY_INITIAL_COOLDOWN = 2       # 获取后初始冷却
+
+# 肌荒れやる気下降概率
+BC_SKIN_MOTIVATION_DRAIN_PROB = 0.35
+
+# やる気下降事件不重复间隔（2.5周年后）
+MOTIVATION_DOWN_COOLDOWN = 5
+
+# 保健室：2.5周年后必消1个（确定性）
+CLINIC_HEAL_COUNT = 1
+
+# やる気倍率表（1=絶不調 ... 5=絶好調）
+MOTIVATION_TRAIN_MULT = {1: 0.8, 2: 0.9, 3: 1.0, 4: 1.1, 5: 1.2}
+
+# お休み基础回复量（按やる気）
+MOTIVATION_REST_VITAL_BASE = {1: 50, 2: 55, 3: 60, 4: 65, 5: 70}
+
 # 齿轮概率
 MECHA_GEAR_PROB = 0.5
 MECHA_GEAR_PROB_LINK_BONUS = 0.05

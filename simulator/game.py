@@ -17,6 +17,8 @@ from .person import (
 )
 from simulator.scenarios.base import ScenarioBase
 from simulator.scenarios.dreams import DreamsScenario
+from .bad_condition import BadConditionType, BadCondition, BadConditionManager
+from .formula import FormulaLayer, MOTIVATION_MULTIPLIER, MOTIVATION_REST_VITAL
 from config import (
     TOTAL_TURN, MAX_INFO_PERSON_NUM, MAX_PERSON_PER_TRAIN,
     BASIC_FIVE_STATUS_LIMIT, TRAINING_BASIC_VALUE, FAIL_RATE_BASIC,
@@ -29,6 +31,10 @@ from config import (
     FRIEND_CARD_LIANGHUA_SSR_ID, FRIEND_CARD_LIANGHUA_R_ID,
     MECHA_TARGET_TOTAL_LEVEL, MECHA_LV_GAIN_BASIC, MECHA_LV_GAIN_SUB_TRAIN_IDX,
     SCORING_NORMAL,
+    # バッドコンディション相关常量
+    BC_LAZY_TRIGGER_PROB, BC_LAZY_COOLDOWN, BC_LAZY_INITIAL_COOLDOWN,
+    BC_SKIN_MOTIVATION_DRAIN_PROB, MOTIVATION_DOWN_COOLDOWN,
+    BC_HEAL_REST_LATE_BED, BC_HEAL_REST_SKIN,
 )
 
 
@@ -74,6 +80,8 @@ class Game:
     skill_score: int = 0                # 已买技能分数
     train_level_count: List[int] = field(default_factory=lambda: [0] * 5)  # 训练等级计数
     failure_rate_bias: int = 0          # 失败率改变量
+    bc_manager: BadConditionManager = field(default_factory=BadConditionManager)  # バッドコンディション
+    formula: FormulaLayer = field(default=None)  # 公式层（__post_init__中初始化）
     is_qie_zhe: bool = False            # 切者
     is_ai_jiao: bool = False            # 爱娇
     is_positive_thinking: bool = False  # 正向思考
@@ -138,6 +146,13 @@ class Game:
 
     # ===== 方法 =====
 
+    def __post_init__(self):
+        """初始化公式层"""
+        if self.bc_manager is None:
+            self.bc_manager = BadConditionManager()
+        if self.formula is None:
+            self.formula = FormulaLayer(self.bc_manager)
+
     def new_game(self, rng: random.Random, uma_id: int = 0, uma_stars: int = 5,
                  card_ids: Optional[List[int]] = None,
                  zhong_ma_blue: Optional[List[int]] = None,
@@ -170,6 +185,8 @@ class Game:
         self.skill_pt = 120
         self.skill_score = 170 * (uma_stars - 2) if uma_stars >= 3 else 120 * uma_stars
         self.failure_rate_bias = 0
+        self.bc_manager = BadConditionManager()
+        self.formula = FormulaLayer(self.bc_manager)
         self.is_qie_zhe = False
         self.is_ai_jiao = False
         self.is_positive_thinking = False
@@ -334,13 +351,16 @@ class Game:
         self.max_vital = min(self.max_vital, 120)
 
     def add_motivation(self, value: int):
-        """增加或减少心情，考虑正向思考"""
+        """增加或减少心情，考虑正向思考和片頭痛限制"""
         if value < 0:
             if self.is_positive_thinking:
                 self.is_positive_thinking = False
             else:
                 self.motivation = max(1, self.motivation + value)
         else:
+            # 片頭痛时やる気不上升
+            if self.bc_manager.is_motivation_blocked():
+                return
             self.motivation = min(5, self.motivation + value)
 
     def add_ji_ban(self, idx: int, value: int, ignore_ai_jiao: bool = False):
@@ -831,10 +851,17 @@ class Game:
     def _apply_training(self, rng: random.Random, train: int) -> bool:
         """处理训练/出行/比赛"""
         if train == TrainActionType.REST:
-            # 休息：回复50体力（夏合宿时通过外出选项实现）
-            self.add_vital(50)
-            if rng.random() < 0.04:
+            # お休み：公式层计算回复量
+            great_prob = self.formula.great_success_prob(self.vital, self.max_vital)
+            is_great = rng.random() < great_prob
+            rest_vital = self.formula.rest_vital(self.motivation, is_great)
+            self.add_vital(rest_vital)
+            if is_great and not self.bc_manager.is_motivation_blocked():
                 self.add_motivation(1)
+            elif rng.random() < 0.04 and not self.bc_manager.is_motivation_blocked():
+                self.add_motivation(1)
+            # お休み概率治愈バッドコンディション
+            healed = self.formula.bc_heal_rest(rng)
             return True
         elif train == TrainActionType.OUTGOING:
             # 外出
@@ -850,6 +877,10 @@ class Game:
             self._run_race(RACE_BASIC_FIVE_STATUS_BONUS, RACE_BASIC_PT_BONUS)
             return True
         elif 0 <= train <= 4:
+            # なまけ癖跳过训练检查
+            if self.bc_manager.should_skip_training(self.turn, rng):
+                # なまけ癖触发，跳过本回合训练
+                return False
             # 训练
             fail_rate = self.fail_rate[train]
             roll = rng.randint(1, 100)
@@ -1194,11 +1225,27 @@ class Game:
             self.skill_pt += 20
 
     def _check_random_events(self, rng: random.Random):
-        """模拟随机事件"""
+        """模拟随机事件（含バッドコンディション公式层）"""
         if self.turn >= 72:
             return
 
-        # 友人解锁出行
+        # ===== バッドコンディション回合效果 =====
+        bc_effects = self.formula.bc_on_turn_start(self.turn, rng)
+        if bc_effects['vital_drain'] != 0:
+            self.add_vital(bc_effects['vital_drain'])
+        if bc_effects['motivation_drain'] != 0:
+            self.add_motivation(bc_effects['motivation_drain'])
+
+        # ===== バッドコンディション随机获取 =====
+        self.bc_manager.try_acquire_random(self.turn, rng)
+
+        # ===== やる気下降事件（2.5周年后5回合不重复） =====
+        if self.turn >= 12 and rng.random() < 0.04:
+            if self.bc_manager.can_motivation_decrease(self.turn):
+                self.add_motivation(-1)
+                self.bc_manager.record_motivation_decrease(self.turn)
+
+        # ===== 友人解锁出行 =====
         if self.friend_type != FRIEND_TYPE_NONE:
             p = self.persons[self.friend_person_id]
             if self.friend_stage == FriendStage.BEFORE_UNLOCK_OUTGOING:
@@ -1209,34 +1256,35 @@ class Game:
                 if rng.random() < unlock_prob:
                     self._handle_friend_unlock(rng)
 
-        # 支援卡连续事件
+        # ===== 支援卡连续事件 =====
         if rng.random() < EVENT_PROB:
             card = rng.randint(0, 5)
             self.add_ji_ban(card, 5)
             self.add_status(rng.randint(0, 4), self.event_strength)
             self.skill_pt += self.event_strength
             if rng.random() < 0.4 * (1.0 - self.turn / TOTAL_TURN):
-                self.add_motivation(1)
+                # やる気上升受片頭痛限制
+                if not self.bc_manager.is_motivation_blocked():
+                    self.add_motivation(1)
             if rng.random() < 0.5:
                 self.add_vital(10)
             elif rng.random() < 0.06:
                 self.add_vital(-10)
 
-        # 马娘随机事件
+        # ===== 马娘随机事件 =====
         if rng.random() < 0.1:
             self.add_all_status(3)
 
-        # 体力事件
+        # ===== 体力事件 =====
         if rng.random() < 0.10:
             self.add_vital(5)
         if rng.random() < 0.02:
             self.add_vital(30)
 
-        # 心情事件
+        # ===== 心情事件（上升受片頭痛限制） =====
         if rng.random() < 0.02:
-            self.add_motivation(1)
-        if self.turn >= 12 and rng.random() < 0.04:
-            self.add_motivation(-1)
+            if not self.bc_manager.is_motivation_blocked():
+                self.add_motivation(1)
 
     # ===== Dreams剧本相关 =====
 
@@ -1446,4 +1494,6 @@ class Game:
             lines.append(f"  {name}: {self.five_status[i]}/{self.five_status_limit[i]}")
         lines.append(f"技能点: {self.skill_pt}  技能分: {self.skill_score}")
         lines.append(f"训练等级: {self.train_level_count}")
+        if self.bc_manager.count > 0:
+            lines.append(f"バッドコンディション: {self.bc_manager}")
         return "\n".join(lines)
