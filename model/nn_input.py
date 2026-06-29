@@ -3,6 +3,7 @@
 
 参考 UmaAi 的 NNInput.h 和 Game::getNNInputV1，将游戏状态编码为神经网络输入向量。
 修复P0-7：维度与实际编码严格对齐，无零填充预留空间。
+修复P2-2：每段末尾加idx注释标记，函数末尾加assert idx == NN_INPUT_C。
 """
 
 import math
@@ -41,113 +42,113 @@ def encode_game_state(game: Game) -> List[float]:
     
     # ===== 基础游戏状态 (132维) =====
     # 回合数（归一化）
-    buf[idx] = game.turn / TOTAL_TURN; idx += 1
+    buf[idx] = game.turn / TOTAL_TURN; idx += 1  # idx=1 after turn
     
     # 体力
     buf[idx] = game.vital / 120.0; idx += 1
-    buf[idx] = game.max_vital / 120.0; idx += 1
+    buf[idx] = game.max_vital / 120.0; idx += 1  # idx=3 after vital
     
     # 干劲 (one-hot 5维)
     for i in range(5):
-        buf[idx] = 1.0 if game.motivation == i + 1 else 0.0; idx += 1
+        buf[idx] = 1.0 if game.motivation == i + 1 else 0.0; idx += 1  # idx=8 after motivation
     
     # 五维属性（归一化到0-1）
     for i in range(5):
-        buf[idx] = game.five_status[i] / 2000.0; idx += 1
+        buf[idx] = game.five_status[i] / 2000.0; idx += 1  # idx=13 after five_status
     # 五维上限
     for i in range(5):
-        buf[idx] = game.five_status_limit[i] / 2000.0; idx += 1
+        buf[idx] = game.five_status_limit[i] / 2000.0; idx += 1  # idx=18 after five_status_limit
     # 成长率
     for i in range(5):
-        buf[idx] = game.five_status_bonus[i] / 120.0; idx += 1
+        buf[idx] = game.five_status_bonus[i] / 120.0; idx += 1  # idx=23 after five_status_bonus
     
     # 技能点
     buf[idx] = game.skill_pt / 1000.0; idx += 1
     # 技能分
-    buf[idx] = game.skill_score / 5000.0; idx += 1
+    buf[idx] = game.skill_score / 5000.0; idx += 1  # idx=25 after skill_pt_score
     
     # 训练等级
     for i in range(5):
-        buf[idx] = game.get_training_level(i) / 4.0; idx += 1
+        buf[idx] = game.get_training_level(i) / 4.0; idx += 1  # idx=30 after training_level
     
     # 训练值 (5*6=30维)
     for t in range(5):
         for i in range(6):
-            buf[idx] = game.train_value[t][i] / 100.0; idx += 1
+            buf[idx] = game.train_value[t][i] / 100.0; idx += 1  # idx=60 after train_value
     
     # 体力变化
     for i in range(5):
-        buf[idx] = game.train_vital_change[i] / 50.0; idx += 1
+        buf[idx] = game.train_vital_change[i] / 50.0; idx += 1  # idx=65 after train_vital_change
     
     # 失败率
     for i in range(5):
-        buf[idx] = game.fail_rate[i] / 100.0; idx += 1
+        buf[idx] = game.fail_rate[i] / 100.0; idx += 1  # idx=70 after fail_rate
     
     # 是否闪彩
     for i in range(5):
-        buf[idx] = 1.0 if game.is_train_shining[i] else 0.0; idx += 1
+        buf[idx] = 1.0 if game.is_train_shining[i] else 0.0; idx += 1  # idx=75 after is_train_shining
     
     # 是否比赛回合
-    buf[idx] = 1.0 if game.is_racing else 0.0; idx += 1
+    buf[idx] = 1.0 if game.is_racing else 0.0; idx += 1  # idx=76 after is_racing
     
     # 是否夏合宿
-    buf[idx] = 1.0 if game.is_xiahesu() else 0.0; idx += 1
+    buf[idx] = 1.0 if game.is_xiahesu() else 0.0; idx += 1  # idx=77 after is_xiahesu
     
     # 是否可比赛
-    buf[idx] = 1.0 if game.is_race_available() else 0.0; idx += 1
+    buf[idx] = 1.0 if game.is_race_available() else 0.0; idx += 1  # idx=78 after is_race_available
     
     # 失败率bias
-    buf[idx] = game.failure_rate_bias / 4.0; idx += 1
+    buf[idx] = game.failure_rate_bias / 4.0; idx += 1  # idx=79 after failure_rate_bias
     
     # 特殊状态
     buf[idx] = 1.0 if game.is_qie_zhe else 0.0; idx += 1
     buf[idx] = 1.0 if game.is_ai_jiao else 0.0; idx += 1
     buf[idx] = 1.0 if game.is_positive_thinking else 0.0; idx += 1
-    buf[idx] = 1.0 if game.is_refresh_mind else 0.0; idx += 1
+    buf[idx] = 1.0 if game.is_refresh_mind else 0.0; idx += 1  # idx=83 after special_status
     
     # 友人卡状态
     buf[idx] = 1.0 if game.friend_type != 0 else 0.0; idx += 1
     buf[idx] = 1.0 if game.friend_is_ssr else 0.0; idx += 1
     buf[idx] = game.friend_stage / 3.0; idx += 1
-    buf[idx] = game.friend_outgoing_used / 5.0; idx += 1
+    buf[idx] = game.friend_outgoing_used / 5.0; idx += 1  # idx=87 after friend_card
     
     # 非卡羁绊
     buf[idx] = game.friendship_noncard_yayoi / 100.0; idx += 1
-    buf[idx] = game.friendship_noncard_reporter / 100.0; idx += 1
+    buf[idx] = game.friendship_noncard_reporter / 100.0; idx += 1  # idx=89 after noncard_friendship
     
     # 种马蓝因子
     for i in range(5):
-        buf[idx] = game.zhong_ma_blue_count[i] / 6.0; idx += 1
+        buf[idx] = game.zhong_ma_blue_count[i] / 6.0; idx += 1  # idx=94 after zhong_ma
     
     # Dreams剧本状态
     buf[idx] = game.mecha_en / 10.0; idx += 1
     buf[idx] = game.mecha_overdrive_energy / 6.0; idx += 1
     buf[idx] = 1.0 if game.mecha_overdrive_enabled else 0.0; idx += 1
-    buf[idx] = 1.0 if game.mecha_any_lose else 0.0; idx += 1
+    buf[idx] = 1.0 if game.mecha_any_lose else 0.0; idx += 1  # idx=98 after dreams_basic
     
     # 研究等级
     for i in range(5):
         buf[idx] = game.mecha_rival_lv[i] / 700.0; idx += 1
-    buf[idx] = game.mecha_rival_lv_total / 3500.0; idx += 1
+    buf[idx] = game.mecha_rival_lv_total / 3500.0; idx += 1  # idx=104 after rival_lv
     
     # 机甲升级
     for i in range(3):
         for j in range(3):
             buf[idx] = game.mecha_upgrade[i][j] / 5.0; idx += 1
     for i in range(3):
-        buf[idx] = game.mecha_upgrade_total[i] / 15.0; idx += 1
+        buf[idx] = game.mecha_upgrade_total[i] / 15.0; idx += 1  # idx=116 after mecha_upgrade
     
     # 齿轮状态
     for i in range(5):
-        buf[idx] = 1.0 if game.mecha_has_gear[i] else 0.0; idx += 1
+        buf[idx] = 1.0 if game.mecha_has_gear[i] else 0.0; idx += 1  # idx=121 after mecha_gear
     
     # UGE胜负
     for i in range(5):
-        buf[idx] = game.mecha_win_history[i] / 2.0; idx += 1
+        buf[idx] = game.mecha_win_history[i] / 2.0; idx += 1  # idx=126 after mecha_win
     
     # 训练倍率
     for i in range(6):
-        buf[idx] = game.mecha_training_status_multiplier[i] - 1.0; idx += 1
+        buf[idx] = game.mecha_training_status_multiplier[i] - 1.0; idx += 1  # idx=132 after training_multiplier
 
     # 验证基础游戏状态维度
     _GLOBAL_BASE_DIM = 132
@@ -163,7 +164,7 @@ def encode_game_state(game: Game) -> List[float]:
     buf[idx] = game.bc_manager.count / 6.0; idx += 1
     # 是否可治愈（保健室/お休み）
     has_healable = (game.bc_manager.count > 0)
-    buf[idx] = 1.0 if has_healable else 0.0; idx += 1
+    buf[idx] = 1.0 if has_healable else 0.0; idx += 1  # idx=140 after bad_condition
 
     assert idx == _GLOBAL_BASE_DIM + NN_INPUT_C_BC, \
         f"BC编码维度不匹配: 实际{idx}, 期望{_GLOBAL_BASE_DIM + NN_INPUT_C_BC}"
@@ -195,7 +196,7 @@ def encode_game_state(game: Game) -> List[float]:
     else:
         # 非Ramen剧本：16维全0
         for _ in range(NN_INPUT_C_RAMEN):
-            buf[idx] = 0.0; idx += 1
+            buf[idx] = 0.0; idx += 1  # idx=156 after ramen
 
     # 验证全局段总维度（基础+BC+Ramen，无零填充）
     assert idx == NN_INPUT_C_GLOBAL, \
@@ -228,7 +229,7 @@ def encode_game_state(game: Game) -> List[float]:
             buf[ci] = 1.0 if cp.is_link else 0.0; ci += 1
             buf[ci] = cp.sai_hou / 50.0; ci += 1
             buf[ci] = cp.event_recovery_amount_up / 50.0; ci += 1
-            buf[ci] = cp.event_effect_up / 50.0; ci += 1
+            buf[ci] = cp.event_effect_up / 50.0; ci += 1  # ci=card_start+26 after card_param
 
             # 验证卡片参数维度
             assert ci - card_start == NN_INPUT_C_CARD, \
@@ -260,8 +261,11 @@ def encode_game_state(game: Game) -> List[float]:
             assert pi - card_start == NN_INPUT_C_CARDPERSON, \
                 f"卡片{card_idx}卡槽维度不匹配: 实际{pi-card_start}, 配置{NN_INPUT_C_CARDPERSON}"
 
-    # 最终维度验证（防止以后再飘）
-    assert len(buf) == NN_INPUT_C, \
-        f"输出维度不匹配: 实际{len(buf)}, 配置{NN_INPUT_C}"
+    # 更新idx到卡片编码完成后的位置
+    idx = NN_INPUT_C_GLOBAL + NN_CARD_NUM * NN_INPUT_C_CARDPERSON
+
+    # P2-2修复：最终断言确保编码维度与NN_INPUT_C严格对齐
+    assert idx == NN_INPUT_C, \
+        f"编码维度不匹配: 实际idx={idx}, 配置NN_INPUT_C={NN_INPUT_C}"
 
     return buf

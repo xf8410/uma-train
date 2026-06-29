@@ -26,11 +26,11 @@ from config import (
 
 
 class LinearBN(nn.Module):
-    """带BatchNorm的线性层"""
+    """带LayerNorm的线性层（P2-5修复：BatchNorm1d在batch_size=1时崩溃，改用LayerNorm）"""
     def __init__(self, in_features: int, out_features: int, bias: bool = False):
         super().__init__()
         self.lin = nn.Linear(in_features=in_features, out_features=out_features, bias=bias)
-        self.bn = nn.BatchNorm1d(out_features, affine=bias)
+        self.bn = nn.LayerNorm(out_features)
     
     def forward(self, x):
         y = self.lin(x)
