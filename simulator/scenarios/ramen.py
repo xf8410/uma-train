@@ -59,7 +59,7 @@ class RamenScenario(ScenarioBase):
         """回合开始时Ramen特定逻辑"""
         # コツ系统：每回合概率提升（基于训练次数）
         for i in range(5):
-            if game.train_level_count[i] > 0 and rng.random() < 0.15:
+            if game.train_level_count[i] > 0 and rng.random() < TASTING_EVENT_PROB:
                 self.kotsu_level[i] = min(3, self.kotsu_level[i] + 1)
 
     def on_turn_end(self, game, rng: random.Random):
@@ -78,7 +78,7 @@ class RamenScenario(ScenarioBase):
         - Feeling加成
         """
         # 隠し味倍率：每10个隠し味 +1% 训练值（上限30%）
-        kakushimi_bonus = min(0.30, self.kakushimi_count * 0.01)
+        kakushimi_bonus = min(KAKUSHIMI_MAX_BONUS, self.kakushimi_count * KAKUSHIMI_PER_BONUS)
         if kakushimi_bonus > 0:
             for i in range(5):
                 train_value[i] = int(train_value[i] * (1.0 + kakushimi_bonus))

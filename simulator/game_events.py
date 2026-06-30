@@ -16,6 +16,9 @@ from config import (
     RANDOM_EVENT_PROB, MOTIVATION_DOWN_PROB, CHARA_EVENT_PROB,
     VITAL_EVENT_SMALL_PROB, VITAL_EVENT_BIG_PROB, MOTIVATION_UP_EVENT_PROB,
     URA_SKILL_SCORE, URA_START_TURN,
+    # v3.19.0: 事件概率命名常量
+    EVENT_TURN_DECAY_PROB, EVENT_HALF_CHANCE, EVENT_VITAL_SMALL_PROB,
+    EVENT_MOT_DOWN_PROB, GREAT_SUCCESS_PROB,
 )
 
 
@@ -57,13 +60,13 @@ def check_random_events(game, rng):
         game.add_ji_ban(card, 5)
         game.add_status(rng.randint(0, 4), game.event_strength)
         game.skill_pt += game.event_strength
-        if rng.random() < 0.4 * (1.0 - game.turn / TOTAL_TURN):
+        if rng.random() < EVENT_TURN_DECAY_PROB * (1.0 - game.turn / TOTAL_TURN):
             # やる気上升受片頭痛限制
             if not game.bc_manager.is_motivation_blocked():
                 game.add_motivation(1)
-        if rng.random() < 0.5:
+        if rng.random() < EVENT_HALF_CHANCE:
             game.add_vital(10)
-        elif rng.random() < 0.06:
+        elif rng.random() < EVENT_VITAL_SMALL_PROB:
             game.add_vital(-10)
 
     # ===== 马娘随机事件（马娘随机事件概率） =====
@@ -86,7 +89,7 @@ def check_fixed_events(game, rng):
     """每回合的固定事件"""
     if game.is_refresh_mind:
         game.add_vital(5)
-        if rng.random() < 0.25:
+        if rng.random() < EVENT_MOT_DOWN_PROB:
             game.is_refresh_mind = False
 
     if game.is_racing:
@@ -234,7 +237,7 @@ def handle_friend_click_event(game, rng, at_train: int):
 
 def _yayoi_outing_5(game, rng):
     """P1-10修复: Yayoi第5次外出，用单次随机判定保证结果一致性"""
-    is_great = rng.random() < 0.75
+    is_great = rng.random() < GREAT_SUCCESS_PROB
     if is_great:
         game.add_vital_friend(30)
         game.add_status_friend(3, 36)
@@ -285,7 +288,7 @@ def handle_friend_outgoing(game, rng):
             game.add_status_friend(0, 25)
             game.add_ji_ban(game.friend_person_id, 5)
         elif game.friend_outgoing_used == 4:
-            if rng.random() < 0.75:
+            if rng.random() < GREAT_SUCCESS_PROB:
                 game.add_vital_friend(40)
                 game.add_status_friend(0, 30)
                 game.skill_pt += 72

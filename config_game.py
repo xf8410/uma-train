@@ -288,6 +288,19 @@ OVERDRIVE_TRAIN_MULT = 1.25
 OVERDRIVE_EN_COST = 3
 
 # URA回合开始
+
+# ===== 事件概率常量（来源：游戏实测+反编译） =====
+EVENT_TURN_DECAY_PROB = 0.4      # 随机事件turn衰减基础概率
+EVENT_HALF_CHANCE = 0.5          # 50/50随机事件概率
+EVENT_VITAL_SMALL_PROB = 0.06    # 随机小体力事件概率
+EVENT_MOT_DOWN_PROB = 0.25       # 随机やる気下降事件概率
+GREAT_SUCCESS_PROB = 0.75        # 大成功概率
+
+# ===== 拉面杯常量（来源：实测） =====
+TASTING_EVENT_PROB = 0.15        # 試食会事件触发概率
+KAKUSHIMI_MAX_BONUS = 0.30       # 隠し味最大加成
+KAKUSHIMI_PER_BONUS = 0.01       # 每个隠し味加成增量
+
 URA_START_TURN = 72
 
 # 研究等级提升量bonus表（来源：反编译）
