@@ -23,6 +23,7 @@ from config import (
     HANDWRITTEN_STDEV_BASE, HANDWRITTEN_STDEV_FLOOR,
     COMPARE_WITH_HANDWRITTEN,
     MCTS_BATCH_NN_CALIBRATE,
+    VALUE_MEAN_OFFSET, VALUE_MEAN_SCALE, VALUE_STDEV_SCALE,
 )
 
 
@@ -374,9 +375,9 @@ class MCTS:
             nn_raw = [round(value_output[i].item(), 6) for i in range(NN_OUTPUT_C_VALUE)]
 
             # 反归一化
-            score_mean = value_output[0].item() * 300 + 38000
-            score_stdev = value_output[1].item() * 150
-            optimistic = value_output[2].item() * 300 + 38000
+            score_mean = value_output[0].item() * VALUE_MEAN_SCALE + VALUE_MEAN_OFFSET
+            score_stdev = value_output[1].item() * VALUE_STDEV_SCALE
+            optimistic = value_output[2].item() * VALUE_MEAN_SCALE + VALUE_MEAN_OFFSET
 
             denormalized_value = ModelOutputValue(
                 score_mean=score_mean,
@@ -454,7 +455,7 @@ class MCTS:
                     with torch.no_grad():
                         output = self.model(nn_input_tensor)
                         value_output = output[0, NN_OUTPUT_C_POLICY:]
-                    nn_value = round(value_output[0].item() * 300 + 38000, 2)
+                    nn_value = round(value_output[0].item() * VALUE_MEAN_SCALE + VALUE_MEAN_OFFSET, 2)
                 except Exception:
                     nn_value = None
 
@@ -511,9 +512,9 @@ class MCTS:
 
         # 用NN结果校准各动作的value
         for i, action_int in enumerate(legal_actions):
-            score_mean = value_output[i, 0].item() * 300 + 38000
-            score_stdev = max(0, value_output[i, 1].item() * 150)
-            optimistic = value_output[i, 2].item() * 300 + 38000
+            score_mean = value_output[i, 0].item() * VALUE_MEAN_SCALE + VALUE_MEAN_OFFSET
+            score_stdev = max(0, value_output[i, 1].item() * VALUE_STDEV_SCALE)
+            optimistic = value_output[i, 2].item() * VALUE_MEAN_SCALE + VALUE_MEAN_OFFSET
             nn_v = ModelOutputValue(score_mean=score_mean, score_stdev=score_stdev, value=optimistic)
             self.all_action_results[action_int].add_result(nn_v)
 
@@ -598,9 +599,9 @@ class MCTS:
 
         # 归一化价值输出
         value = [
-            (best_value.score_mean - 38000) / 300,
-            best_value.score_stdev / 150,
-            (best_value.value - 38000) / 300,
+            (best_value.score_mean - VALUE_MEAN_OFFSET) / VALUE_MEAN_SCALE,
+            best_value.score_stdev / VALUE_STDEV_SCALE,
+            (best_value.value - VALUE_MEAN_OFFSET) / VALUE_MEAN_SCALE,
         ]
 
         return {

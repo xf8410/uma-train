@@ -23,6 +23,16 @@ from enum import IntEnum
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
+from config import (
+    BC_ACQUIRE_PROB_BAD, BC_ACQUIRE_PROB_LAZY, BC_ACQUIRE_PROB_FAT,
+    BC_ACQUIRE_PROB_HEADACHE, BC_ACQUIRE_PROB_SKIN,
+    BC_ACQUIRE_PROB_LATE_BED,
+    BC_HEAL_REST_LATE_BED, BC_HEAL_REST_SKIN,
+    BC_LAZY_TRIGGER_PROB, BC_LAZY_COOLDOWN,
+    BC_LAZY_INITIAL_COOLDOWN,
+    BC_SKIN_MOTIVATION_DRAIN_PROB,
+)
+
 
 class BadConditionType(IntEnum):
     """バッドコンディション类型枚举"""
@@ -130,8 +140,8 @@ class BadConditionManager:
             return False
 
         # 随机触发概率约40%（实测估算）
-        if rng.random() < 0.4:
-            bc.cooldown_turns = 3  # 触发后冷却3回合
+        if rng.random() < BC_LAZY_TRIGGER_PROB:
+            bc.cooldown_turns = BC_LAZY_COOLDOWN  # 触发后冷却3回合
             return True
         return False
 
@@ -140,7 +150,7 @@ class BadConditionManager:
         
         每回合约35%概率やる気-1
         """
-        if self.has(BadConditionType.SKIN) and rng.random() < 0.35:
+        if self.has(BadConditionType.SKIN) and rng.random() < BC_SKIN_MOTIVATION_DRAIN_PROB:
             return -1
         return 0
 
@@ -186,12 +196,12 @@ class BadConditionManager:
         """
         # 按优先级尝试获取
         acquire_table = [
-            (BadConditionType.BAD, 0.03),
-            (BadConditionType.LAZY, 0.02),
-            (BadConditionType.FAT, 0.015),
-            (BadConditionType.HEADACHE, 0.02),
-            (BadConditionType.SKIN, 0.01),
-            (BadConditionType.LATE_BED, 0.03),
+            (BadConditionType.BAD, BC_ACQUIRE_PROB_BAD),
+            (BadConditionType.LAZY, BC_ACQUIRE_PROB_LAZY),
+            (BadConditionType.FAT, BC_ACQUIRE_PROB_FAT),
+            (BadConditionType.HEADACHE, BC_ACQUIRE_PROB_HEADACHE),
+            (BadConditionType.SKIN, BC_ACQUIRE_PROB_SKIN),
+            (BadConditionType.LATE_BED, BC_ACQUIRE_PROB_LATE_BED),
         ]
         for bc_type, prob in acquire_table:
             if not self.has(bc_type) and rng.random() < prob:
@@ -236,11 +246,11 @@ class BadConditionManager:
         """
         healed = []
         # 夜ふかし
-        if self.has(BadConditionType.LATE_BED) and rng.random() < 0.5:
+        if self.has(BadConditionType.LATE_BED) and rng.random() < BC_HEAL_REST_LATE_BED:
             self._remove(BadConditionType.LATE_BED)
             healed.append(BadConditionType.LATE_BED)
         # 肌荒れ
-        if self.has(BadConditionType.SKIN) and rng.random() < 0.4:
+        if self.has(BadConditionType.SKIN) and rng.random() < BC_LAZY_TRIGGER_PROB:
             self._remove(BadConditionType.SKIN)
             healed.append(BadConditionType.SKIN)
         return healed
