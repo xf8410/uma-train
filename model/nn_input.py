@@ -2,8 +2,8 @@
 赛马娘AI训练框架 - NN输入编码
 
 参考 UmaAi 的 NNInput.h 和 Game::getNNInputV1，将游戏状态编码为神经网络输入向量。
-修复P0-7：维度与实际编码严格对齐，无零填充预留空间。
-修复P2-2：每段末尾加idx注释标记，函数末尾加assert idx == NN_INPUT_C。
+修复BUG-3：NN_INPUT_C_CARD对齐C++ 77维布局（29基础+35固有类型+13固有效果）
+修复BUG-4：每个cardperson块中Person(12)在前、CardParam(77)在后，对齐C++布局
 """
 
 import math
@@ -19,15 +19,212 @@ from config import (
     NN_INPUT_C_BC, NN_INPUT_C_RAMEN,
 )
 
+# C++ NNINPUT_CHANNELS_CARD_V1布局常量
+_CARD_BASIC_C = 29      # 基础参数：类型one-hot(7)+友情(1)+干劲(1)+训练(1)+bonus(6)+智体(1)+hint(2)+预留(4)+hint概率(1)+得意(1)+失败率(1)+体力消费(1)+预留(2)
+_CARD_UNIQUE_TYPE_C = 35 # 固有类型one-hot(0~34)
+_CARD_UNIQUE_EFFECT_C = 13 # 固有效果值：速耐力根智pt(5)+友情(1)+干劲(1)+训练(1)+失败率(1)+体力消费(1)+智体(1)+预留(1)
+assert _CARD_BASIC_C + _CARD_UNIQUE_TYPE_C + _CARD_UNIQUE_EFFECT_C == NN_INPUT_C_CARD
+
+
+def encode_card_param(buf: List[float], ci: int, cp, game: 'Game') -> int:
+    """编码支援卡参数到buf[ci:]，对齐C++ SupportCard::getCardParamNNInputV1
+    
+    77维布局：基础参数(29) + 固有类型one-hot(35) + 固有效果值(13)
+    
+    Args:
+        buf: 输出缓冲区
+        ci: 当前写入位置
+        cp: SupportCard对象
+        game: 游戏状态
+    
+    Returns:
+        写入后的位置
+    """
+    # 先清零77维
+    for i in range(NN_INPUT_C_CARD):
+        buf[ci + i] = 0.0
+    
+    # ===== 基础参数 (29维, ci+0 ~ ci+28) =====
+    # 0~6: cardType one-hot (7维)
+    card_type = min(cp.card_type, 6)
+    buf[ci + card_type] = 1.0
+    
+    # 7: 友情加成
+    buf[ci + 7] = cp.you_qing_basic * 0.04
+    # 8: 干劲加成
+    buf[ci + 8] = cp.gan_jing_basic * 0.02
+    # 9: 训练加成
+    buf[ci + 9] = cp.xun_lian_basic * 0.05
+    # 10~15: bonus (6维)
+    for i in range(6):
+        buf[ci + 10 + i] = cp.bonus_basic[i] * 0.5
+    # 16: 智力彩圈体力
+    buf[ci + 16] = cp.wiz_vital_bonus * 0.2
+    # 17: hint等级 (>0时)
+    if cp.hint_level > 0:
+        buf[ci + 17] = cp.hint_level * 0.4
+    # 18: 无hint标记 (hint_level==0时为1.0)
+    else:
+        buf[ci + 18] = 1.0
+    # 19~22: 预留 (已清零)
+    # 23: hint概率提升
+    buf[ci + 23] = cp.hint_prob_increase * 0.02
+    # 24: 得意率
+    buf[ci + 24] = cp.de_yi_lv * 0.02
+    # 25: 失败率下降
+    buf[ci + 25] = cp.fail_rate_drop * 0.04
+    # 26: 体力消费下降
+    buf[ci + 26] = cp.vital_cost_drop * 0.05
+    # 27~28: 预留 (已清零)
+    
+    # ===== 固有类型one-hot (35维, ci+29 ~ ci+63) =====
+    # 固有效果类型编码（从SupportCard获取，默认0=无固有）
+    unique_type = getattr(cp, 'unique_effect_type', 0)
+    
+    if unique_type == 0:
+        buf[ci + 29 + 0] = 1.0  # 无固有
+    elif unique_type in (1, 2):
+        # 条件型固有，根据unique_param[1]区分80/100
+        unique_param = getattr(cp, 'unique_effect_param', [0] * 6)
+        if len(unique_param) > 1 and unique_param[1] == 80:
+            buf[ci + 29 + 1] = 1.0
+        elif len(unique_param) > 1 and unique_param[1] == 100:
+            buf[ci + 29 + 2] = 1.0
+        else:
+            buf[ci + 29 + 1] = 1.0  # fallback
+    elif 3 <= unique_type <= 14:
+        buf[ci + 29 + unique_type] = 1.0
+    elif unique_type == 16:
+        # 购买技能型固有，简化编码
+        unique_param = getattr(cp, 'unique_effect_param', [0] * 6)
+        if len(unique_param) > 4 and unique_param[1] == 1 and unique_param[4] == 5:
+            buf[ci + 29 + 16] = 1.0
+        elif len(unique_param) > 4 and unique_param[1] == 1 and unique_param[4] == 3:
+            buf[ci + 29 + 30] = 1.0
+        elif len(unique_param) > 4 and unique_param[1] == 2 and unique_param[4] == 3:
+            buf[ci + 29 + 31] = 1.0
+        elif len(unique_param) > 4 and unique_param[1] == 3 and unique_param[4] == 3:
+            buf[ci + 29 + 32] = 1.0
+        else:
+            buf[ci + 29 + 16] = 1.0  # fallback
+    elif unique_type == 17:
+        buf[ci + 29 + 17] = 1.0
+    elif unique_type == 20:
+        buf[ci + 29 + 20] = 1.0
+    elif unique_type == 21:
+        buf[ci + 29 + 21] = 1.0
+    elif unique_type == 22:
+        buf[ci + 29 + 22] = 1.0
+    elif 6 <= unique_type <= 14:
+        buf[ci + 29 + unique_type] = 1.0
+    elif unique_type > 0 and unique_type <= 34:
+        buf[ci + 29 + unique_type] = 1.0
+    
+    # ===== 固有效果值 (13维, ci+64 ~ ci+76) =====
+    # 根据固有效果类型写入对应的效果值
+    # 已清零，只写有值的
+    if unique_type in (1, 2):
+        unique_param = getattr(cp, 'unique_effect_param', [0] * 6)
+        _write_unique_effect(buf, ci + _CARD_BASIC_C + _CARD_UNIQUE_TYPE_C, unique_param)
+    
+    return ci + NN_INPUT_C_CARD
+
+
+def _write_unique_effect(buf: List[float], effect_base: int, params: List):
+    """写入固有效果值，对齐C++ writeUniqueEffect
+    
+    效果值索引：
+    0-4: 速耐力根智加成
+    5: pt加成
+    6: 友情加成
+    7: 干劲加成
+    8: 训练加成
+    9: 失败率下降
+    10: 体力消费下降
+    11: 智力彩圈体力
+    12: 预留
+    """
+    # 每对参数 (key, value) 从 params[2] 开始
+    for idx in range(2, len(params) - 1, 2):
+        key = params[idx]
+        value = params[idx + 1]
+        if key <= 0:
+            continue
+        elif key == 1:
+            buf[effect_base + 6] = 0.04 * value
+        elif key == 2:
+            buf[effect_base + 7] = 0.02 * value
+        elif key == 3:
+            buf[effect_base + 0] = 0.5 * value
+        elif key == 4:
+            buf[effect_base + 1] = 0.5 * value
+        elif key == 5:
+            buf[effect_base + 2] = 0.5 * value
+        elif key == 6:
+            buf[effect_base + 3] = 0.5 * value
+        elif key == 7:
+            buf[effect_base + 4] = 0.5 * value
+        elif key == 8:
+            buf[effect_base + 8] = 0.05 * value
+        elif key == 27:
+            buf[effect_base + 9] = 0.04 * value
+        elif key == 28:
+            buf[effect_base + 10] = 0.05 * value
+        elif key == 30:
+            buf[effect_base + 5] = 0.5 * value
+        elif key == 31:
+            buf[effect_base + 11] = 0.2 * value
+        elif key == 41:
+            for i in range(5):
+                buf[effect_base + i] = 0.5
+
+
+def encode_person_info(buf: List[float], pi: int, p, game: 'Game', card_idx: int) -> int:
+    """编码人头信息到buf[pi:]，对齐C++ Person::getCardNNInputV1
+    
+    12维布局（对齐C++）：羁绊/100 + 羁绊>=80 + 羁绊>=100 + 提示 + 预留3 + 训练位置one-hot5
+    
+    Args:
+        buf: 输出缓冲区
+        pi: 当前写入位置
+        p: Person对象
+        game: 游戏状态
+        card_idx: 卡片索引
+    
+    Returns:
+        写入后的位置
+    """
+    # 0: 羁绊/100
+    buf[pi] = p.friendship / 100.0; pi += 1
+    # 1: 羁绊>=80
+    buf[pi] = 1.0 if p.friendship >= 80 else 0.0; pi += 1
+    # 2: 羁绊>=100
+    buf[pi] = 1.0 if p.friendship >= 100 else 0.0; pi += 1
+    # 3: 是否有hint
+    buf[pi] = 1.0 if p.is_hint else 0.0; pi += 1
+    # 4~6: 预留（C++中为0）
+    buf[pi] = 0.0; pi += 1
+    buf[pi] = 0.0; pi += 1
+    buf[pi] = 0.0; pi += 1
+    # 7~11: 在哪个训练（one-hot 5维）
+    for t in range(5):
+        found = any(
+            game.person_distribution[t][h] == card_idx
+            for h in range(5)
+        )
+        buf[pi] = 1.0 if found else 0.0; pi += 1
+    
+    return pi
+
 
 def encode_game_state(game: Game) -> List[float]:
     """将游戏状态编码为神经网络输入向量
     
-    输入结构：
-    (全局信息156维)(支援卡1信息38维)...(支援卡6信息38维)
+    输入结构（对齐C++布局）：
+    (全局信息156维)(卡槽1信息89维)...(卡槽6信息89维)
     
     全局信息156维 = 基础游戏状态132维 + BC8维 + Ramen16维
-    每卡38维 = 卡片参数26维 + 人头信息12维
+    每卡89维 = 人头信息12维(前) + 卡片参数77维(后)  ← BUG-4修复：对齐C++顺序
     
     参考 UmaAi 的 Game::getNNInputV1
     
@@ -203,6 +400,7 @@ def encode_game_state(game: Game) -> List[float]:
         f"全局编码维度不匹配: 实际{idx}, 配置{NN_INPUT_C_GLOBAL}"
 
     # ===== 支援卡信息 =====
+    # BUG-4修复：对齐C++布局，每个cardperson块 = [person_info(12)][card_param(77)]
     for card_idx in range(NN_CARD_NUM):
         card_start = NN_INPUT_C_GLOBAL + card_idx * NN_INPUT_C_CARDPERSON
         
@@ -210,61 +408,27 @@ def encode_game_state(game: Game) -> List[float]:
             p = game.persons[card_idx]
             cp = p.card_param
             
-            # 支援卡参数（NN_INPUT_C_CARD=26维）
-            ci = card_start
-            buf[ci] = cp.card_type / 6.0; ci += 1
-            buf[ci] = cp.you_qing_basic / 100.0; ci += 1
-            buf[ci] = cp.gan_jing_basic / 100.0; ci += 1
-            buf[ci] = cp.xun_lian_basic / 100.0; ci += 1
-            for i in range(6):
-                buf[ci] = cp.bonus_basic[i] / 50.0; ci += 1
-            buf[ci] = cp.wiz_vital_bonus / 10.0; ci += 1
-            for i in range(6):
-                buf[ci] = cp.initial_bonus[i] / 30.0; ci += 1
-            buf[ci] = cp.hint_level / 5.0; ci += 1
-            buf[ci] = cp.hint_prob_increase / 100.0; ci += 1
-            buf[ci] = cp.de_yi_lv / 100.0; ci += 1
-            buf[ci] = cp.fail_rate_drop / 100.0; ci += 1
-            buf[ci] = cp.vital_cost_drop / 100.0; ci += 1
-            buf[ci] = 1.0 if cp.is_link else 0.0; ci += 1
-            buf[ci] = cp.sai_hou / 50.0; ci += 1
-            buf[ci] = cp.event_recovery_amount_up / 50.0; ci += 1
-            buf[ci] = cp.event_effect_up / 50.0; ci += 1  # ci=card_start+26 after card_param
+            # BUG-4修复：Person在前(12维)，CardParam在后(77维)
+            # 人头信息（NN_INPUT_C_PERSON=12维）
+            pi = card_start
+            pi = encode_person_info(buf, pi, p, game, card_idx)
+            
+            # 验证人头信息维度
+            assert pi - card_start == NN_INPUT_C_PERSON, \
+                f"卡片{card_idx}人头维度不匹配: 实际{pi-card_start}, 配置{NN_INPUT_C_PERSON}"
+            
+            # 支援卡参数（NN_INPUT_C_CARD=77维）
+            ci = card_start + NN_INPUT_C_PERSON
+            ci = encode_card_param(buf, ci, cp, game)
 
             # 验证卡片参数维度
-            assert ci - card_start == NN_INPUT_C_CARD, \
-                f"卡片{card_idx}参数维度不匹配: 实际{ci-card_start}, 配置{NN_INPUT_C_CARD}"
-            
-            # 人头信息（NN_INPUT_C_PERSON=12维）
-            pi = card_start + NN_INPUT_C_CARD
-            buf[pi] = p.friendship / 100.0; pi += 1   # 1
-            buf[pi] = 1.0 if p.is_hint else 0.0; pi += 1  # 2
-            buf[pi] = p.person_type / 7.0; pi += 1  # 3
-            buf[pi] = p.card_record / 10.0; pi += 1  # 4
-            
-            # 该人头在哪个训练（one-hot 5维）
-            for t in range(5):
-                found = any(
-                    game.person_distribution[t][h] == card_idx
-                    for h in range(5)
-                )
-                buf[pi] = 1.0 if found else 0.0; pi += 1  # 5-9
-            
-            # 闪彩状态 (2维)
-            buf[pi] = 1.0 if p.is_card_shining(cp.card_type) else 0.0; pi += 1  # 10
-            buf[pi] = 1.0 if p.is_card_shining(4) else 0.0; pi += 1  # 11
-            
-            # 是否是友人卡
-            buf[pi] = 1.0 if p.person_type == PersonType.FRIEND_CARD else 0.0; pi += 1  # 12
-
-            # 验证卡槽总维度（卡片+人头）
-            assert pi - card_start == NN_INPUT_C_CARDPERSON, \
-                f"卡片{card_idx}卡槽维度不匹配: 实际{pi-card_start}, 配置{NN_INPUT_C_CARDPERSON}"
+            assert ci - card_start == NN_INPUT_C_CARDPERSON, \
+                f"卡片{card_idx}卡槽维度不匹配: 实际{ci-card_start}, 配置{NN_INPUT_C_CARDPERSON}"
 
     # 更新idx到卡片编码完成后的位置
     idx = NN_INPUT_C_GLOBAL + NN_CARD_NUM * NN_INPUT_C_CARDPERSON
 
-    # P2-2修复：最终断言确保编码维度与NN_INPUT_C严格对齐
+    # 最终断言确保编码维度与NN_INPUT_C严格对齐
     assert idx == NN_INPUT_C, \
         f"编码维度不匹配: 实际idx={idx}, 配置NN_INPUT_C={NN_INPUT_C}"
 

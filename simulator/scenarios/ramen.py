@@ -22,6 +22,7 @@ scenario_id=14，2026年6月新实装的剧本。
 import random
 from typing import List, Optional, Dict
 from simulator.scenarios.base import ScenarioBase
+from config_game import TASTING_EVENT_PROB, KAKUSHIMI_MAX_BONUS, KAKUSHIMI_PER_BONUS
 
 
 class RamenScenario(ScenarioBase):

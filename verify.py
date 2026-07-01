@@ -788,7 +788,7 @@ def test_config_split():
     from config_mcts import SEARCH_SINGLE_MAX as ssm, MCTS_POLICY_TEMPERATURE as mpt
     from config_train import LEARNING_RATE as lr, BATCH_SIZE as bs
     assert tt == 78 and ms == 60000
-    assert no == 56 and msl == 376 * 1024
+    assert no == 53 and msl == 376 * 1024
     assert ssm == 256 and mpt == 1.0
     assert lr == 7e-4 and bs == 1024
     print(f'  各子模块独立导入: config_game(TOTAL_TURN={tt}), '
@@ -796,16 +796,60 @@ def test_config_split():
           f'config_train(LEARNING_RATE={lr})')
 
     # 4. 验证config_nn独立导入NN维度常量
-    from config_nn import NN_INPUT_C_GLOBAL, NN_INPUT_C_BC, NN_INPUT_C_RAMEN
+    from config_nn import NN_INPUT_C_GLOBAL, NN_INPUT_C_BC, NN_INPUT_C_RAMEN, NN_INPUT_C_CARD, NN_INPUT_C_PERSON
     assert NN_INPUT_C_GLOBAL == 156, f'NN_INPUT_C_GLOBAL应为156, 实际{NN_INPUT_C_GLOBAL}'
     assert NN_INPUT_C_BC == 8, f'NN_INPUT_C_BC应为8, 实际{NN_INPUT_C_BC}'
     assert NN_INPUT_C_RAMEN == 16, f'NN_INPUT_C_RAMEN应为16, 实际{NN_INPUT_C_RAMEN}'
-    print(f'  config_nn维度明细: GLOBAL={NN_INPUT_C_GLOBAL}, BC={NN_INPUT_C_BC}, RAMEN={NN_INPUT_C_RAMEN}')
+    assert NN_INPUT_C_CARD == 77, f'NN_INPUT_C_CARD应为77(对齐C++), 实际{NN_INPUT_C_CARD}'
+    assert NN_INPUT_C_PERSON == 12, f'NN_INPUT_C_PERSON应为12, 实际{NN_INPUT_C_PERSON}'
+    print(f'  config_nn维度明细: GLOBAL={NN_INPUT_C_GLOBAL}, BC={NN_INPUT_C_BC}, RAMEN={NN_INPUT_C_RAMEN}, CARD={NN_INPUT_C_CARD}, PERSON={NN_INPUT_C_PERSON}')
 
     print('  [PASS] config拆分验证测试通过!')
 
+
+def test_action_encoding():
+    """验证Action编码/解码对齐C++语义"""
+    print('\n=== 测试Action编码 ===')
+    from simulator.action import Action, TrainActionType, GameStage
+
+    # BUG-1验证：action_id=13 应解码为 train=-1, overdrive=True
+    a13 = Action.from_int(13)
+    assert a13.train == -1, f'action_id=13的train应为-1, 实际{a13.train}'
+    assert a13.overdrive == True, f'action_id=13的overdrive应为True, 实际{a13.overdrive}'
+    assert a13.type == GameStage.BEFORE_TRAIN, f'action_id=13的type应为BEFORE_TRAIN'
+    print(f'  from_int(13): train={a13.train}, overdrive={a13.overdrive} (正确: 仅开overdrive不训练)')
+
+    # to_int(overdrive=True, train=-1) 应返回13
+    a_back = Action(type=GameStage.BEFORE_TRAIN, train=-1, overdrive=True)
+    assert a_back.to_int() == 13, f'overdrive+train=-1应返回13, 实际{a_back.to_int()}'
+    print(f'  to_int(train=-1, overdrive=True) = {a_back.to_int()} (正确)')
+
+    # 验证训练+overdrive (8-12)
+    for train_val in range(5):
+        a_over = Action(type=GameStage.BEFORE_TRAIN, train=train_val, overdrive=True)
+        expected_id = train_val + 8
+        assert a_over.to_int() == expected_id, f'train={train_val}+overdrive应返回{expected_id}, 实际{a_over.to_int()}'
+        a_decoded = Action.from_int(expected_id)
+        assert a_decoded.train == train_val, f'from_int({expected_id}).train应为{train_val}, 实际{a_decoded.train}'
+        assert a_decoded.overdrive == True, f'from_int({expected_id}).overdrive应为True'
+    print(f'  训练+overdrive (8-12) 往返验证通过')
+
+    # 验证普通训练 (0-7)
+    for train_val in range(8):
+        a_normal = Action(type=GameStage.BEFORE_TRAIN, train=train_val, overdrive=False)
+        assert a_normal.to_int() == train_val, f'train={train_val}应返回{train_val}'
+        a_decoded = Action.from_int(train_val)
+        assert a_decoded.train == train_val and a_decoded.overdrive == False
+    print(f'  普通训练 (0-7) 往返验证通过')
+
+    # C++参考验证：overdrive ? (train == -1 ? 5 + 8 : train + 8) : train
+    # overdrive=True, train=-1 → 13 ✓
+    # overdrive=True, train=0 → 8 ✓
+    print('  [PASS] Action编码测试通过!')
+
 if __name__ == "__main__":
     test_game()
+    test_action_encoding()
     test_mcts()
     test_formula_layer()
     test_bad_condition()

@@ -220,7 +220,8 @@ def train(
     # 训练数据
     print("加载训练数据...")
     t_dataset = UmaTrainDataset(train_data_path)
-    t_dataloader = DataLoader(t_dataset, shuffle=True, batch_size=batch_size)
+    t_dataloader = DataLoader(t_dataset, shuffle=True, batch_size=batch_size,
+                              pin_memory=True, num_workers=2, drop_last=True)
     print(f"训练数据: {len(t_dataset)} 条")
 
     # 验证数据
@@ -262,9 +263,12 @@ def train(
             # value_loss始终参与，用固定权重（不再随机丢弃）
             loss = p_loss + VALUE_LOSS_BASE_WEIGHT * v_loss
 
-            loss_record[0] += (v_loss.detach().item() + p_loss.detach().item())
-            loss_record[1] += v_loss.detach().item()
-            loss_record[2] += p_loss.detach().item()
+            # PT-4修复：用detach()累积，减少.item()调用开销
+            v_loss_det = v_loss.detach()
+            p_loss_det = p_loss.detach()
+            loss_record[0] += (v_loss_det + p_loss_det).item()
+            loss_record[1] += v_loss_det.item()
+            loss_record[2] += p_loss_det.item()
             loss_record[3] += 1
             loss_record[4] += p1_correct / batch_size
 

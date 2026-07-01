@@ -65,6 +65,11 @@ class SupportCard:
     event_recovery_amount_up: int = 0  # 友人卡事件体力加成
     event_effect_up: int = 0           # 友人卡事件属性加成
     
+    # 固有效果（对齐C++ SupportCard，用于NN输入编码77维布局）
+    is_db_card: bool = False           # 是否为数据库卡（有固有效果数据）
+    unique_effect_type: int = 0        # 固有效果类型（0=无，1/2=条件型，3-22=其他）
+    unique_effect_param: List[float] = field(default_factory=lambda: [0.0] * 6)  # 固有效果参数
+    
     # 得意率分布（用于随机分配人头到训练）
     deyilv_distribution: List[float] = field(default_factory=lambda: [100.0] * 5 + [200.0])
 
@@ -189,6 +194,11 @@ class Person:
         cp.is_link = data.get("isLink", False)
         cp.event_recovery_amount_up = data.get("eventRecoveryAmountUp", 0)
         cp.event_effect_up = data.get("eventEffectUp", 0)
+        
+        # 固有效果（对齐C++ SupportCard）
+        cp.is_db_card = data.get("isDBCard", False)
+        cp.unique_effect_type = data.get("uniqueEffectType", 0)
+        cp.unique_effect_param = data.get("uniqueEffectParam", [0.0] * 6)
         
         self.friendship = cp.initial_ji_ban
         self._setup_deyilv_distribution()
