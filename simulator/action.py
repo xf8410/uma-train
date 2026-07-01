@@ -82,12 +82,9 @@ class Action:
         if action_id < 8:
             # 普通训练动作
             return cls(type=GameStage.BEFORE_TRAIN, train=action_id, overdrive=False)
-        elif action_id < 13:
-            # 训练+overdrive（0-4对应速耐力根智）
+        elif action_id < 14:
+            # 训练+overdrive
             return cls(type=GameStage.BEFORE_TRAIN, train=action_id - 8, overdrive=True)
-        elif action_id == 13:
-            # 仅开overdrive不训练（C++: overdrive && train==-1 → 5+8=13）
-            return cls(type=GameStage.BEFORE_TRAIN, train=-1, overdrive=True)
         elif action_id < 50:
             # 升级动作
             head = (action_id - 14) // 6
